@@ -1,13 +1,28 @@
 #!/bin/bash
 
 # Docker 镜像构建脚本
-# 支持构建不同版本的 JDK 镜像
+# 支持构建不同版本的 JDK 镜像（完整版和精简版）
+#
+# 使用方法:
+#   ./build.sh [JAVA_VERSION] [IMAGE_TAG]
+#
+# 环境变量:
+#   BUILD_VARIANT - 构建版本类型: full (完整版), minimal (精简版), both (两者，默认)
+#   NO_CACHE      - 是否禁用缓存: true/false (默认 false)
+#   TIMEZONE      - 时区设置 (默认 Asia/Shanghai)
+#
+# 示例:
+#   ./build.sh 17                           # 构建 Java 17 两个版本
+#   BUILD_VARIANT=full ./build.sh 17        # 只构建完整版
+#   BUILD_VARIANT=minimal ./build.sh 17     # 只构建精简版
+#   NO_CACHE=true ./build.sh 17             # 无缓存构建两个版本
 
 set -e
 
 # 默认值
 JAVA_VERSION=${1:-17}
 IMAGE_TAG=${2:-"ofyann/java:${JAVA_VERSION}"}
+BUILD_VARIANT=${BUILD_VARIANT:-both}  # full, minimal, both
 NO_CACHE=${NO_CACHE:-false}
 TIMEZONE=${TIMEZONE:-Asia/Shanghai}
 
@@ -136,28 +151,95 @@ if [ "$NO_CACHE" = "true" ]; then
     BUILD_ARGS+=(--no-cache)
 fi
 
-# 构建镜像
-print_info "开始构建镜像..."
-docker build \
-    "${BUILD_ARGS[@]}" \
-    -t "${IMAGE_TAG}" \
-    -f Dockerfile \
-    .
+# 构建镜像的函数
+build_image() {
+    local variant=$1
+    local dockerfile=$2
+    local tag=$3
+    local description=$4
 
-# 验证构建
-if [ $? -eq 0 ]; then
-    print_info "✓ 镜像构建成功！"
+    print_info "======================================"
+    print_info "  构建 ${description}"
+    print_info "======================================"
+    print_info "Dockerfile: ${dockerfile}"
+    print_info "镜像标签: ${tag}"
     print_info ""
-    print_info "测试镜像..."
-    docker run --rm "${IMAGE_TAG}" java -version
-    docker run --rm "${IMAGE_TAG}" javac -version
-    print_info ""
-    print_info "镜像信息:"
-    docker images "${IMAGE_TAG}" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
-    print_info ""
-    print_info "运行容器:"
-    print_info "  docker run -it --rm ${IMAGE_TAG} bash"
-else
-    print_error "镜像构建失败！"
-    exit 1
+
+    # 构建镜像
+    print_info "开始构建镜像..."
+    docker build \
+        "${BUILD_ARGS[@]}" \
+        -t "${tag}" \
+        -f "${dockerfile}" \
+        .
+
+    # 验证构建
+    if [ $? -eq 0 ]; then
+        print_info "✓ ${description} 构建成功！"
+        print_info ""
+        print_info "测试镜像..."
+        docker run --rm "${tag}" java -version
+
+        # 完整版测试 javac
+        if [ "$variant" = "full" ]; then
+            docker run --rm "${tag}" javac -version 2>/dev/null || print_warn "javac 不可用（JDK 8 可能正常）"
+        fi
+
+        print_info ""
+        print_info "镜像信息:"
+        docker images "${tag}" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
+        print_info ""
+        print_info "运行容器:"
+        print_info "  docker run -it --rm ${tag} bash"
+        print_info ""
+        return 0
+    else
+        print_error "${description} 构建失败！"
+        return 1
+    fi
+}
+
+# 根据 BUILD_VARIANT 构建镜像
+if [ "$BUILD_VARIANT" = "full" ] || [ "$BUILD_VARIANT" = "both" ]; then
+    print_info "======================================"
+    print_info "  构建完整版（带 Arthas）"
+    print_info "======================================"
+    FULL_TAG="${IMAGE_TAG}"
+    if ! build_image "full" "Dockerfile" "${FULL_TAG}" "完整版（带 Arthas 和开发工具）"; then
+        exit 1
+    fi
 fi
+
+if [ "$BUILD_VARIANT" = "minimal" ] || [ "$BUILD_VARIANT" = "both" ]; then
+    print_info "======================================"
+    print_info "  构建精简版（纯运行时）"
+    print_info "======================================"
+    # 如果 IMAGE_TAG 已经有 -minimal 后缀，直接使用；否则添加
+    if [[ "${IMAGE_TAG}" == *"-minimal" ]]; then
+        MINIMAL_TAG="${IMAGE_TAG}"
+    else
+        # 提取基础标签（去除版本号）并添加 -minimal
+        BASE_TAG=$(echo "${IMAGE_TAG}" | sed 's/:.*$//')
+        VERSION_TAG=$(echo "${IMAGE_TAG}" | sed 's/^.*://')
+        MINIMAL_TAG="${BASE_TAG}:${VERSION_TAG}-minimal"
+    fi
+
+    if ! build_image "minimal" "Dockerfile.minimal" "${MINIMAL_TAG}" "精简版（纯运行时）"; then
+        exit 1
+    fi
+fi
+
+# 显示所有构建的镜像
+print_info "======================================"
+print_info "  构建完成"
+print_info "======================================"
+if [ "$BUILD_VARIANT" = "both" ]; then
+    print_info "已构建两个版本的镜像:"
+    print_info "  完整版: ${FULL_TAG}"
+    print_info "  精简版: ${MINIMAL_TAG}"
+elif [ "$BUILD_VARIANT" = "full" ]; then
+    print_info "已构建完整版镜像: ${FULL_TAG}"
+elif [ "$BUILD_VARIANT" = "minimal" ]; then
+    print_info "已构建精简版镜像: ${MINIMAL_TAG}"
+fi
+print_info "======================================"

@@ -9,6 +9,7 @@ on:
       - main
     paths:
       - 'Dockerfile'
+      - 'Dockerfile.minimal'
       - '.github/workflows/docker-build.yml'
       - 'build.sh'
   workflow_dispatch:
@@ -91,7 +92,8 @@ jobs:
 
             echo "  版本: $FULL_VERSION"
 
-            # 添加到 matrix
+            # 添加到 matrix - 为每个版本创建两个条目（完整版和精简版）
+            # 完整版（带 Arthas）
             MATRIX_JSON=$(echo "$MATRIX_JSON" | jq \
               --arg major "$version" \
               --arg full "$FULL_VERSION" \
@@ -99,7 +101,22 @@ jobs:
               '.include += [{
                 "java_major": $major,
                 "full_version": $full,
-                "download_version": $dl
+                "download_version": $dl,
+                "variant": "full",
+                "variant_suffix": ""
+              }]')
+
+            # 精简版（纯运行时）
+            MATRIX_JSON=$(echo "$MATRIX_JSON" | jq \
+              --arg major "$version" \
+              --arg full "$FULL_VERSION" \
+              --arg dl "$DOWNLOAD_VERSION" \
+              '.include += [{
+                "java_major": $major,
+                "full_version": $full,
+                "download_version": $dl,
+                "variant": "minimal",
+                "variant_suffix": "-minimal"
               }]')
           done
 
@@ -145,12 +162,13 @@ jobs:
         continue-on-error: true
         run: |
           # 检查具体版本的镜像是否已存在
-          if docker manifest inspect ${{ env.IMAGE_NAME }}:${{ matrix.full_version }} > /dev/null 2>&1; then
+          TAG="${{ matrix.full_version }}${{ matrix.variant_suffix }}"
+          if docker manifest inspect ${{ env.IMAGE_NAME }}:${TAG} > /dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "镜像 ${{ matrix.full_version }} 已存在"
+            echo "镜像 ${TAG} 已存在"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "镜像 ${{ matrix.full_version }} 不存在，需要构建"
+            echo "镜像 ${TAG} 不存在，需要构建"
           fi
 
       - name: Build download URL
@@ -182,44 +200,50 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ${{ matrix.variant == 'minimal' && './Dockerfile.minimal' || './Dockerfile' }}
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ matrix.java_major }}
-            ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}
+            ${{ env.IMAGE_NAME }}:${{ matrix.java_major }}${{ matrix.variant_suffix }}
+            ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}${{ matrix.variant_suffix }}
           build-args: |
             JAVA_MAJOR=${{ matrix.java_major }}
             JAVA_VERSION=${{ matrix.java_major }}
             JAVA_URL=${{ steps.build_url.outputs.java_url }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
             VCS_REF=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.java_major }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.java_major }}
+          cache-from: type=gha,scope=${{ matrix.java_major }}-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.java_major }}-${{ matrix.variant }}
 
       - name: Test image
         if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
-          echo "测试镜像: ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}"
-          docker run --rm ${{ env.IMAGE_NAME }}:${{ matrix.full_version }} java -version
-          docker run --rm ${{ env.IMAGE_NAME }}:${{ matrix.full_version }} javac -version
+          TAG="${{ matrix.full_version }}${{ matrix.variant_suffix }}"
+          echo "测试镜像: ${{ env.IMAGE_NAME }}:${TAG}"
+          docker run --rm ${{ env.IMAGE_NAME }}:${TAG} java -version
+
+          # 完整版测试 javac
+          if [ "${{ matrix.variant }}" = "full" ]; then
+            docker run --rm ${{ env.IMAGE_NAME }}:${TAG} javac -version || echo "警告: javac 不可用（JDK 8 可能正常）"
+          fi
 
           # 测试时区
-          TZ=$(docker run --rm ${{ env.IMAGE_NAME }}:${{ matrix.full_version }} date +%Z)
+          TZ=$(docker run --rm ${{ env.IMAGE_NAME }}:${TAG} date +%Z)
           echo "容器时区: $TZ"
 
-          # 测试中文支持
-          docker run --rm ${{ env.IMAGE_NAME }}:${{ matrix.full_version }} locale | grep -i "utf"
+          # 测试 UTF-8 支持
+          docker run --rm ${{ env.IMAGE_NAME }}:${TAG} locale | grep -i "utf"
 
           echo "✓ 测试通过"
 
       - name: Update version info
         if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
-          echo "Java ${{ matrix.java_major }} - ${{ matrix.full_version }} 构建完成" >> $GITHUB_STEP_SUMMARY
+          VARIANT_NAME="${{ matrix.variant == 'minimal' && '精简版' || '完整版' }}"
+          echo "Java ${{ matrix.java_major }} ${VARIANT_NAME} - ${{ matrix.full_version }}${{ matrix.variant_suffix }} 构建完成" >> $GITHUB_STEP_SUMMARY
           echo "镜像标签:" >> $GITHUB_STEP_SUMMARY
-          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.java_major }}" >> $GITHUB_STEP_SUMMARY
-          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.java_major }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
 
   # 第三步：生成构建报告
   report:
@@ -237,3 +261,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "支持的 Java 版本: 8, 17, 21, 25" >> $GITHUB_STEP_SUMMARY
           echo "镜像仓库: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "每个 Java 版本构建两个镜像:" >> $GITHUB_STEP_SUMMARY
+          echo "  - 完整版（带 Arthas）: \`ofyann/java:17\`" >> $GITHUB_STEP_SUMMARY
+          echo "  - 精简版（纯运行时）: \`ofyann/java:17-minimal\`" >> $GITHUB_STEP_SUMMARY

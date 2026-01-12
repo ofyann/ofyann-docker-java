@@ -14,7 +14,7 @@ ARG JAVA_SHA256
 # 安装构建依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        wget \
+        curl \
         ca-certificates \
         binutils && \
     rm -rf /var/lib/apt/lists/*
@@ -28,7 +28,7 @@ RUN if [ -z "$JAVA_URL" ]; then \
         fi; \
     fi && \
     echo "Downloading from: $JAVA_URL" && \
-    wget -O /tmp/jdk.tar.gz "$JAVA_URL" && \
+    curl -fsSL -o /tmp/jdk.tar.gz "$JAVA_URL" && \
     if [ -n "$JAVA_SHA256" ]; then \
         echo "$JAVA_SHA256 /tmp/jdk.tar.gz" | sha256sum -c -; \
     fi
@@ -38,10 +38,9 @@ RUN mkdir -p /opt/jdk && \
     tar -zxf /tmp/jdk.tar.gz -C /opt/jdk --strip-components=1 && \
     rm /tmp/jdk.tar.gz
 
-# 使用 jlink 创建精简的自定义运行时（仅包含必要模块，大幅减小镜像体积）
-# 可以通过 JAVA_MODULES 参数自定义模块
-# 包含 Arthas 必需模块: jdk.attach, jdk.jdi, jdk.compiler 等
-ARG JAVA_MODULES="java.base,java.instrument,java.logging,java.management,java.naming,java.rmi,java.sql,java.xml,jdk.attach,jdk.compiler,jdk.jdi,jdk.jartool,jdk.unsupported,jdk.crypto.ec"
+# 使用 jlink 创建精简的自定义运行时（最小模块集，仅用于运行应用）
+# 不包含开发工具和调试工具，专注于运行时性能和体积
+ARG JAVA_MODULES="java.base,java.logging,java.management,java.naming,java.sql,java.xml,jdk.unsupported,jdk.crypto.ec"
 
 RUN if [ "$JAVA_MAJOR" != "8" ] && [ -d "/opt/jdk/jmods" ]; then \
         echo "Detected JDK with jmods. Using jlink..." && \
@@ -116,8 +115,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/ofyann/ofyann-docker-java" \
       org.opencontainers.image.version="${JAVA_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.title="OfYann JDK" \
-      org.opencontainers.image.description="Eclipse Temurin JDK ${JAVA_VERSION} on Debian Stable Slim with Chinese support"
+      org.opencontainers.image.title="OfYann JDK Minimal" \
+      org.opencontainers.image.description="Eclipse Temurin JDK ${JAVA_VERSION} Minimal Runtime on Debian Stable Slim"
 
 # 从构建阶段复制精简的 JDK
 COPY --from=jdk-builder /opt/jdk-minimal /opt/java
@@ -125,7 +124,6 @@ COPY --from=jdk-builder /opt/jdk-minimal /opt/java
 # 安装运行时依赖和 tini
 ARG TINI_VERSION=v0.19.0
 ARG TIMEZONE=Asia/Shanghai
-ARG ARTHAS_VERSION=4.1.5
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         tzdata \
@@ -133,26 +131,18 @@ RUN apt-get update && \
         locales \
         fontconfig \
         curl \
-        # 基础系统工具
-        vim \
-        less \
-        unzip \
-        zip \
-        # 网络诊断工具
+        # 基础网络诊断工具
         iproute2 \
         iputils-ping \
         # 系统调试工具
         procps \
         lsof \
-        # 通用工具
-        jq \
         && \
     # 配置时区（可通过构建参数自定义）
     ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime && \
     echo "${TIMEZONE}" > /etc/timezone && \
-    # 配置语言环境（支持中文和英文）
+    # 配置语言环境（仅支持英文，减小体积）
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
-    sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen && \
     locale-gen && \
     # 下载 tini
     ARCH="$(dpkg --print-architecture)" && \
@@ -164,10 +154,6 @@ RUN apt-get update && \
     esac && \
     curl -fsSL -o /usr/bin/tini "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-static-${TINI_ARCH}" && \
     chmod +x /usr/bin/tini && \
-    # 下载并安装 Arthas
-    curl -fsSL -o /tmp/arthas-bin.zip "https://github.com/alibaba/arthas/releases/download/arthas-all-${ARTHAS_VERSION}/arthas-bin.zip" && \
-    unzip -q /tmp/arthas-bin.zip -d /opt/ && \
-    rm /tmp/arthas-bin.zip && \
     # 清理缓存
     apt-get autoremove -y && \
     apt-get clean && \
@@ -178,10 +164,10 @@ ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     LC_ALL=en_US.UTF-8 \
     JAVA_HOME=/opt/java \
-    PATH=/opt/java/bin:/opt/arthas/bin:$PATH
+    PATH=/opt/java/bin:$PATH
 
 # 验证 Java 安装
-RUN java -version && javac -version
+RUN java -version
 
 # 使用 tini 作为初始化进程
 ENTRYPOINT ["/usr/bin/tini", "--"]

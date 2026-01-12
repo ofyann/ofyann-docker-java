@@ -4,14 +4,18 @@
 
 ## 特性
 
-- ✅ **使用 JDK**: 包含完整的 Java 开发工具（javac, jar 等）
+- ✅ **两个版本可选**:
+  - **完整版**（Dockerfile）: 包含 Arthas 诊断工具和开发工具，约 200-240MB
+  - **精简版**（Dockerfile.minimal）: 纯运行时环境，无 Arthas，约 120-150MB
 - ✅ **自动构建**: 每日自动检测新版本并构建
-- ✅ **镜像最小化**: 使用 jlink 优化，体积约 180-220MB
+- ✅ **镜像最小化**: 使用 jlink 优化，大幅减小体积
 - ✅ **多版本支持**: Java 8, 17, 21, 25
 - ✅ **时区支持**: 默认 Asia/Shanghai，可自定义
-- ✅ **中文支持**: 内置 UTF-8 和中文 locale
+- ✅ **UTF-8 支持**: 完整版支持中文，精简版仅英文
 
 ## 支持的版本
+
+### 完整版（带 Arthas）
 
 | Java 版本 | 镜像标签 | 说明 |
 |-----------|---------|------|
@@ -20,17 +24,30 @@
 | Java 21 | `ofyann/java:21`, `ofyann/java:21.0.9_10` | LTS 版本 |
 | Java 25 | `ofyann/java:25`, `ofyann/java:25.0.1_8` | 最新版本 |
 
+### 精简版（纯运行时）
+
+| Java 版本 | 镜像标签 | 说明 |
+|-----------|---------|------|
+| Java 8 | `ofyann/java:8-minimal` | LTS 精简版 |
+| Java 17 | `ofyann/java:17-minimal` | LTS 精简版 |
+| Java 21 | `ofyann/java:21-minimal` | LTS 精简版 |
+| Java 25 | `ofyann/java:25-minimal` | 精简版 |
+
 **标签说明:**
-- `ofyann/java:8` - 大版本最新（会随版本更新）
-- `ofyann/java:8u472b08` - 具体小版本（固定不变）
+- `ofyann/java:8` - 完整版，大版本最新（会随版本更新）
+- `ofyann/java:8-minimal` - 精简版，大版本最新
+- `ofyann/java:8u472b08` - 完整版，具体小版本（固定不变）
 
 ## 快速使用
 
 ### 拉取镜像
 
 ```bash
-# 拉取最新的 Java 17
+# 拉取完整版（带 Arthas 诊断工具）
 docker pull ofyann/java:17
+
+# 拉取精简版（纯运行时，更小体积）
+docker pull ofyann/java:17-minimal
 
 # 拉取特定版本
 docker pull ofyann/java:17.0.17_10
@@ -42,28 +59,33 @@ docker pull ofyann/java:17.0.17_10
 # 查看 Java 版本
 docker run --rm ofyann/java:17 java -version
 
-# 进入容器
+# 进入容器（完整版有 vim 等工具）
 docker run -it --rm ofyann/java:17 bash
-```
 
-### 编译 Java 代码
-
-```bash
-# 编译
-docker run --rm -v "$PWD":/work -w /work ofyann/java:17 javac Main.java
-
-# 运行
-docker run --rm -v "$PWD":/work -w /work ofyann/java:17 java Main
+# 进入精简版容器（工具较少）
+docker run -it --rm ofyann/java:17-minimal bash
 ```
 
 ### 作为基础镜像
 
 ```dockerfile
+# 生产环境：使用精简版（体积更小）
+FROM ofyann/java:17-minimal
+
+WORKDIR /app
+COPY target/myapp.jar app.jar
+
+CMD ["java", "-jar", "app.jar"]
+```
+
+```dockerfile
+# 开发/调试环境：使用完整版（带 Arthas）
 FROM ofyann/java:17
 
 WORKDIR /app
 COPY target/myapp.jar app.jar
 
+# 可以使用 Arthas 进行诊断
 CMD ["java", "-jar", "app.jar"]
 ```
 
@@ -115,10 +137,19 @@ make test JAVA_VERSION=17
 ### 使用 Docker 命令
 
 ```bash
+# 构建完整版（带 Arthas）
 docker build \
   --build-arg JAVA_MAJOR=17 \
   --build-arg TIMEZONE=Asia/Shanghai \
   -t ofyann/java:17 \
+  .
+
+# 构建精简版（纯运行时）
+docker build \
+  --build-arg JAVA_MAJOR=17 \
+  --build-arg TIMEZONE=Asia/Shanghai \
+  -f Dockerfile.minimal \
+  -t ofyann/java:17-minimal \
   .
 ```
 
@@ -194,39 +225,73 @@ docker run --rm ofyann/java:17 java --list-modules
 
 ### 包含的软件
 
-**Java 开发工具:**
-- Eclipse Temurin JDK (完整开发工具链)
-- `javac` - Java 编译器
-- `jar` - JAR 打包工具
-- `jdeps` - 依赖分析工具
-- `javadoc` - 文档生成工具
-- `jlink` - 自定义运行时工具
+#### 完整版（Dockerfile）
+
+**Java 模块:**
+- Eclipse Temurin JDK（通过 jlink 精简）
+- 运行时模块：`java.base`, `java.logging`, `java.management`, `java.naming`, `java.rmi`, `java.sql`, `java.xml`
+- 开发/诊断模块：`jdk.attach`, `jdk.compiler`, `jdk.jdi`, `jdk.jartool`（支持 Arthas）
+- 加密模块：`jdk.crypto.ec`, `jdk.unsupported`
 
 **系统工具:**
 - Tini - 轻量级初始化系统
-- curl, wget - 网络工具
-- vim, nano - 文本编辑器
+- curl - 网络下载工具
+- vim - 文本编辑器
+- less - 文件查看器
+- unzip, zip - 压缩工具
 - jq - JSON 处理工具
 
-**网络工具:**
-- net-tools, iproute2 - 网络配置和诊断
-- iputils-ping - 连通性测试
-- dnsutils - DNS 查询 (nslookup, dig)
-- tcpdump - 网络抓包
-- telnet - TCP 连接测试
+**网络诊断工具:**
+- iproute2 - 网络配置和诊断（ip 命令）
+- iputils-ping - 连通性测试（ping）
 
 **系统调试工具:**
-- procps, htop - 进程和资源监控
+- procps - 进程和资源监控（ps, top, free, vmstat）
 - lsof - 查看打开的文件
-- strace - 系统调用追踪
-- smem, sysstat - 内存和性能分析
 
 **Java 诊断工具:**
 - Arthas - 阿里开源 Java 诊断神器（方法监控、反编译、线程分析等）
 
-**图形支持:**
-- X11 支持库（libx11, libxext, libxrender, libxi, libxtst）
+**字体支持:**
+- fontconfig - 字体配置（Java GUI 应用必需）
+
+**语言支持:**
+- UTF-8 英文和中文 locale
+
+---
+
+#### 精简版（Dockerfile.minimal）
+
+**Java 模块（最小集）:**
+- Eclipse Temurin JDK（通过 jlink 极限精简）
+- 仅运行时模块：`java.base`, `java.logging`, `java.management`, `java.naming`, `java.sql`, `java.xml`
+- 加密模块：`jdk.crypto.ec`, `jdk.unsupported`
+- **不包含**：开发工具、调试模块、Arthas 支持
+
+**系统工具:**
+- Tini - 轻量级初始化系统
+- curl - 网络下载工具
+
+**网络诊断工具:**
+- iproute2 - 网络配置和诊断（ip 命令）
+- iputils-ping - 连通性测试（ping）
+
+**系统调试工具:**
+- procps - 进程和资源监控（ps, top, free, vmstat）
+- lsof - 查看打开的文件
+
+**字体支持:**
 - fontconfig - 字体配置
+
+**语言支持:**
+- UTF-8 英文 locale（不含中文以减小体积）
+
+**不包含:**
+- ❌ Arthas（无法使用 Java 诊断功能）
+- ❌ vim（无编辑器）
+- ❌ zip/unzip（无压缩工具）
+- ❌ jq（无 JSON 工具）
+- ❌ 中文 locale
 
 ### 环境变量
 
@@ -240,25 +305,30 @@ TZ=Asia/Shanghai  # 默认时区
 
 ### 镜像大小
 
-包含完整 JDK 开发工具 + 开发调试工具的精简镜像：
+#### 完整版（带 Arthas 和开发工具）
 
-- Java 8: ~250MB (手动精简优化 + 工具)
-- Java 17: ~300MB (jlink 模块化优化 + 工具)
-- Java 21: ~310MB (jlink 模块化优化 + 工具)
-- Java 25: ~310MB (jlink 模块化优化 + 工具)
+- Java 8: ~210MB (手动精简 + Arthas + 工具)
+- Java 17: ~200MB (jlink 精简 + Arthas + 工具)
+- Java 21: ~210MB (jlink 精简 + Arthas + 工具)
+- Java 25: ~210MB (jlink 精简 + Arthas + 工具)
 
-**Java 8 优化说明**:
-- 删除源代码 (src.zip, javafx-src.zip)
-- 删除示例和演示代码 (demo, sample)
-- 删除开发工具 (Mission Control, VisualVM, Derby DB)
-- 删除 JavaFX 和 Web Start
-- 删除 C 头文件 (include) 和调试符号
-- 详细说明见 [JAVA8_OPTIMIZATION.md](JAVA8_OPTIMIZATION.md)
+#### 精简版（纯运行时）
+
+- Java 8: ~160MB (手动精简，仅运行时)
+- Java 17: ~120MB (jlink 极限精简，仅运行时)
+- Java 21: ~130MB (jlink 极限精简，仅运行时)
+- Java 25: ~130MB (jlink 极限精简，仅运行时)
 
 **对比**:
 - 官方完整 JDK: ~450MB
-- 官方 JRE: ~200MB
-- 本镜像: ~200-260MB (完整 JDK 工具链 + 优化)
+- 完整版: ~200-210MB（节省 53-56%）
+- 精简版: ~120-160MB（节省 64-73%）
+
+**优化效果**（相比之前版本）:
+- 删除 X11 库: 减少 50-80MB
+- 删除冗余工具: 减少 10-20MB
+- 精简 JAVA_MODULES: 减少 10-20MB
+- **总计节省**: 70-120MB
 
 ## 限制说明
 
@@ -348,6 +418,24 @@ docker run -e TZ=America/New_York ofyann/java:17 date
 docker run -v /etc/localtime:/etc/localtime:ro ofyann/java:17 date
 ```
 
+## 版本选择建议
+
+### 什么时候使用完整版？
+
+- ✅ 需要使用 Arthas 进行线上诊断和问题排查
+- ✅ 需要在容器内编辑配置文件（vim）
+- ✅ 需要处理压缩文件或 JSON 数据
+- ✅ 需要中文字符显示支持
+- ✅ 开发和测试环境
+
+### 什么时候使用精简版？
+
+- ✅ 生产环境运行 Java 应用（追求极致体积）
+- ✅ 不需要在线诊断工具
+- ✅ 容器编排环境（Kubernetes）需要快速拉取
+- ✅ 带宽和存储受限的场景
+- ✅ 仅需要运行 jar/war 包
+
 ## 项目结构
 
 ```
@@ -355,7 +443,8 @@ ofyann-docker-java/
 ├── .github/
 │   └── workflows/
 │       └── docker-build.yml       # GitHub Actions 工作流
-├── Dockerfile                     # 主 Dockerfile
+├── Dockerfile                     # 完整版 Dockerfile（带 Arthas）
+├── Dockerfile.minimal             # 精简版 Dockerfile（纯运行时）
 ├── build.sh                       # 本地构建脚本
 ├── test-version-parsing.sh        # 版本解析测试
 ├── Makefile                       # Make 命令

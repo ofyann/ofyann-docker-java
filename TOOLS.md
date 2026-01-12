@@ -16,19 +16,20 @@
 | telnet | TCP 连接测试 |
 | net-tools | ifconfig, netstat, route |
 | iproute2 | ip, ss |
-| dnsutils | nslookup, dig |
-| tcpdump | 网络抓包 |
+| iputils-ping | ping |
 
 ### 系统工具
 | 工具 | 说明 |
 |------|------|
 | vim, nano | 文本编辑 |
 | jq | JSON 处理 |
-| htop, top | 进程监控 |
 | lsof | 查看打开的文件 |
-| strace | 系统调用追踪 |
-| procps | ps, free, vmstat |
-| smem, sysstat | 性能分析 |
+| procps | ps, top, free, vmstat |
+
+### Java 诊断
+| 工具 | 说明 |
+|------|------|
+| Arthas | Java 诊断神器：方法监控、反编译、线程分析 |
 
 ## Arthas 常用命令
 
