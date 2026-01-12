@@ -15,14 +15,14 @@
 
 | Java 版本 | 镜像标签 | 说明 |
 |-----------|---------|------|
-| Java 8 | `ofyann/java:8`, `ofyann/java:8u452b09` | LTS 版本 |
-| Java 17 | `ofyann/java:17`, `ofyann/java:17.0.15_6` | LTS 版本 |
-| Java 21 | `ofyann/java:21`, `ofyann/java:21.0.5_11` | LTS 版本 |
-| Java 25 | `ofyann/java:25`, `ofyann/java:25.x.x_x` | 最新版本 |
+| Java 8 | `ofyann/java:8`, `ofyann/java:8u472b08` | LTS 版本 |
+| Java 17 | `ofyann/java:17`, `ofyann/java:17.0.17_10` | LTS 版本 |
+| Java 21 | `ofyann/java:21`, `ofyann/java:21.0.9_10` | LTS 版本 |
+| Java 25 | `ofyann/java:25`, `ofyann/java:25.0.1_8` | 最新版本 |
 
 **标签说明:**
 - `ofyann/java:8` - 大版本最新（会随版本更新）
-- `ofyann/java:8u452b09` - 具体小版本（固定不变）
+- `ofyann/java:8u472b08` - 具体小版本（固定不变）
 
 ## 快速使用
 
@@ -33,7 +33,7 @@
 docker pull ofyann/java:17
 
 # 拉取特定版本
-docker pull ofyann/java:17.0.15_6
+docker pull ofyann/java:17.0.17_10
 ```
 
 ### 运行容器
@@ -194,11 +194,39 @@ docker run --rm ofyann/java:17 java --list-modules
 
 ### 包含的软件
 
-- Eclipse Temurin JDK (完整版)
-- Tini - 初始化系统
-- 基础工具: curl, wget, ca-certificates
-- X11 支持库（GUI 应用）
-- 字体配置
+**Java 开发工具:**
+- Eclipse Temurin JDK (完整开发工具链)
+- `javac` - Java 编译器
+- `jar` - JAR 打包工具
+- `jdeps` - 依赖分析工具
+- `javadoc` - 文档生成工具
+- `jlink` - 自定义运行时工具
+
+**系统工具:**
+- Tini - 轻量级初始化系统
+- curl, wget - 网络工具
+- vim, nano - 文本编辑器
+- jq - JSON 处理工具
+
+**网络工具:**
+- net-tools, iproute2 - 网络配置和诊断
+- iputils-ping - 连通性测试
+- dnsutils - DNS 查询 (nslookup, dig)
+- tcpdump - 网络抓包
+- telnet - TCP 连接测试
+
+**系统调试工具:**
+- procps, htop - 进程和资源监控
+- lsof - 查看打开的文件
+- strace - 系统调用追踪
+- smem, sysstat - 内存和性能分析
+
+**Java 诊断工具:**
+- Arthas - 阿里开源 Java 诊断神器（方法监控、反编译、线程分析等）
+
+**图形支持:**
+- X11 支持库（libx11, libxext, libxrender, libxi, libxtst）
+- fontconfig - 字体配置
 
 ### 环境变量
 
@@ -212,10 +240,25 @@ TZ=Asia/Shanghai  # 默认时区
 
 ### 镜像大小
 
-- Java 8: ~180MB
-- Java 17: ~210MB
-- Java 21: ~220MB
-- Java 25: ~220MB
+包含完整 JDK 开发工具 + 开发调试工具的精简镜像：
+
+- Java 8: ~250MB (手动精简优化 + 工具)
+- Java 17: ~300MB (jlink 模块化优化 + 工具)
+- Java 21: ~310MB (jlink 模块化优化 + 工具)
+- Java 25: ~310MB (jlink 模块化优化 + 工具)
+
+**Java 8 优化说明**:
+- 删除源代码 (src.zip, javafx-src.zip)
+- 删除示例和演示代码 (demo, sample)
+- 删除开发工具 (Mission Control, VisualVM, Derby DB)
+- 删除 JavaFX 和 Web Start
+- 删除 C 头文件 (include) 和调试符号
+- 详细说明见 [JAVA8_OPTIMIZATION.md](JAVA8_OPTIMIZATION.md)
+
+**对比**:
+- 官方完整 JDK: ~450MB
+- 官方 JRE: ~200MB
+- 本镜像: ~200-260MB (完整 JDK 工具链 + 优化)
 
 ## 限制说明
 
@@ -266,7 +309,7 @@ TZ=Asia/Shanghai  # 默认时区
 使用完整的版本标签确保版本固定:
 
 ```dockerfile
-FROM ofyann/java:17.0.15_6
+FROM ofyann/java:17.0.17_10
 ```
 
 ### 2. 如何查看可用的版本？
@@ -311,13 +354,19 @@ docker run -v /etc/localtime:/etc/localtime:ro ofyann/java:17 date
 ofyann-docker-java/
 ├── .github/
 │   └── workflows/
-│       └── docker-build.yml    # GitHub Actions 工作流
-├── Dockerfile                  # 主 Dockerfile
-├── build.sh                    # 本地构建脚本
-├── Makefile                    # Make 命令
-├── .dockerignore              # Docker 忽略文件
-├── .gitignore                 # Git 忽略文件
-└── README.md                  # 本文件
+│       └── docker-build.yml       # GitHub Actions 工作流
+├── Dockerfile                     # 主 Dockerfile
+├── build.sh                       # 本地构建脚本
+├── test-version-parsing.sh        # 版本解析测试
+├── Makefile                       # Make 命令
+├── README.md                      # 本文件
+├── USAGE.md                       # 使用示例
+├── TOOLS.md                       # 开发调试工具说明
+├── CHANGELOG.md                   # 更新日志
+├── FIXES.md                       # 问题修复记录
+├── JAVA8_OPTIMIZATION.md          # Java 8 优化说明
+├── .dockerignore                  # Docker 忽略文件
+└── .gitignore                     # Git 忽略文件
 ```
 
 ## 许可证

@@ -28,7 +28,7 @@ jobs:
   fetch-versions:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.fetch.outputs.matrix }}
 
     steps:
       - name: Fetch latest versions from Adoptium API
@@ -43,8 +43,8 @@ jobs:
           for version in $JAVA_VERSIONS; do
             echo "检查 Java $version..."
 
-            # 从 Adoptium API 获取最新版本信息
-            API_URL="https://api.adoptium.net/v3/assets/latest/${version}/hotspot"
+            # 从 Adoptium API 获取最新版本信息（过滤标准 JDK）
+            API_URL="https://api.adoptium.net/v3/assets/latest/${version}/hotspot?image_type=jdk&os=linux&architecture=x64"
             RESPONSE=$(curl -s "$API_URL")
 
             if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "[]" ]; then
@@ -53,30 +53,36 @@ jobs:
             fi
 
             # 解析版本信息
-            VERSION_DATA=$(echo "$RESPONSE" | jq -r '.[0].version_data')
-            SEMVER=$(echo "$VERSION_DATA" | jq -r '.semver')
+            VERSION_OBJ=$(echo "$RESPONSE" | jq -r '.[0].version')
+            SEMVER=$(echo "$VERSION_OBJ" | jq -r '.semver')
+            OPENJDK_VERSION=$(echo "$VERSION_OBJ" | jq -r '.openjdk_version')
 
             # 根据不同的 Java 版本构建不同的标签格式
             if [ "$version" = "8" ]; then
-              # Java 8: 提取 8u452-b09 格式
-              UPDATE=$(echo "$SEMVER" | grep -oP '\d+u\d+' || echo "")
-              BUILD=$(echo "$SEMVER" | grep -oP 'b\d+' || echo "")
+              # Java 8: openjdk_version "1.8.0_472-b08" -> 8u472-b08
+              SECURITY=$(echo "$OPENJDK_VERSION" | sed -n 's/.*_\([0-9]*\).*/\1/p')
+              BUILD=$(echo "$OPENJDK_VERSION" | sed -n 's/.*-\(b[0-9]*\).*/\1/p')
 
-              if [ -n "$UPDATE" ] && [ -n "$BUILD" ]; then
-                FULL_VERSION="${UPDATE}${BUILD}"
-                DOWNLOAD_VERSION="${UPDATE}-${BUILD}"
+              if [ -n "$SECURITY" ] && [ -n "$BUILD" ]; then
+                UPDATE="8u${SECURITY}"
+                FULL_VERSION="${UPDATE}${BUILD}"         # 8u472b08
+                DOWNLOAD_VERSION="${UPDATE}-${BUILD}"    # 8u472-b08
               else
-                echo "无法解析 Java 8 版本号: $SEMVER"
+                echo "无法解析 Java 8 版本号: $OPENJDK_VERSION"
                 continue
               fi
             else
-              # Java 11+: 提取 17.0.15+6 格式
-              UPDATE=$(echo "$SEMVER" | grep -oP '\d+\.\d+\.\d+' || echo "")
-              BUILD=$(echo "$SEMVER" | grep -oP '\+\d+' | tr -d '+' || echo "")
+              # Java 11+: semver "17.0.17+10" 或 "21.0.9+10.0.LTS"
+              # 去除 .LTS 后缀
+              CLEAN_SEMVER=$(echo "$SEMVER" | sed 's/\.0\.LTS$//' | sed 's/-LTS$//')
+
+              # 提取版本号: 17.0.17+10 -> 17.0.17 和 10
+              UPDATE=$(echo "$CLEAN_SEMVER" | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+              BUILD=$(echo "$CLEAN_SEMVER" | sed -n 's/.*+\([0-9]*\).*/\1/p')
 
               if [ -n "$UPDATE" ] && [ -n "$BUILD" ]; then
-                FULL_VERSION="${UPDATE}_${BUILD}"
-                DOWNLOAD_VERSION="${UPDATE}+${BUILD}"
+                FULL_VERSION="${UPDATE}_${BUILD}"        # 17.0.17_10
+                DOWNLOAD_VERSION="${UPDATE}+${BUILD}"    # 17.0.17+10
               else
                 echo "无法解析 Java ${version} 版本号: $SEMVER"
                 continue
@@ -100,14 +106,9 @@ jobs:
           echo "生成的 matrix:"
           echo "$MATRIX_JSON" | jq .
 
-          # 输出 matrix
-          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
-
-      - name: Set matrix
-        id: set-matrix
-        run: |
-          MATRIX='${{ steps.fetch.outputs.matrix }}'
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          # 输出 matrix（压缩为单行）
+          MATRIX_COMPACT=$(echo "$MATRIX_JSON" | jq -c .)
+          echo "matrix=$MATRIX_COMPACT" >> $GITHUB_OUTPUT
 
   # 第二步：构建和推送 Docker 镜像
   build-and-push:
@@ -160,9 +161,10 @@ jobs:
           DOWNLOAD_VERSION="${{ matrix.download_version }}"
 
           if [ "$JAVA_MAJOR" = "8" ]; then
-            # Java 8: OpenJDK8U-jdk_x64_linux_hotspot_8u452b09.tar.gz
-            # URL: jdk8u452-b09/OpenJDK8U-jdk_x64_linux_hotspot_8u452b09.tar.gz
-            VERSION_CLEAN=$(echo "$DOWNLOAD_VERSION" | tr -d 'u' | tr '-' '')
+            # Java 8: OpenJDK8U-jdk_x64_linux_hotspot_8u472b08.tar.gz
+            # URL: jdk8u472-b08/OpenJDK8U-jdk_x64_linux_hotspot_8u472b08.tar.gz
+            # 文件名格式: 移除 '-' 但保留 'u'
+            VERSION_CLEAN=$(echo "$DOWNLOAD_VERSION" | tr -d '-')
             JAVA_URL="https://github.com/adoptium/temurin${JAVA_MAJOR}-binaries/releases/download/jdk${DOWNLOAD_VERSION}/OpenJDK${JAVA_MAJOR}U-jdk_x64_linux_hotspot_${VERSION_CLEAN}.tar.gz"
           else
             # Java 11+: OpenJDK17U-jdk_x64_linux_hotspot_17.0.15_6.tar.gz

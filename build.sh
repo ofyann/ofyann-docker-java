@@ -34,8 +34,8 @@ fetch_version() {
     local version=$1
     print_info "正在获取 Java $version 的最新版本..."
 
-    # 从 Adoptium API 获取最新版本
-    API_URL="https://api.adoptium.net/v3/assets/latest/${version}/hotspot"
+    # 从 Adoptium API 获取最新版本（过滤标准 JDK）
+    API_URL="https://api.adoptium.net/v3/assets/latest/${version}/hotspot?image_type=jdk&os=linux&architecture=x64"
     RESPONSE=$(curl -s "$API_URL" 2>/dev/null)
 
     if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "[]" ]; then
@@ -44,26 +44,30 @@ fetch_version() {
     fi
 
     # 解析版本信息
-    VERSION_DATA=$(echo "$RESPONSE" | jq -r '.[0].version_data' 2>/dev/null)
-    if [ -z "$VERSION_DATA" ] || [ "$VERSION_DATA" = "null" ]; then
+    VERSION_OBJ=$(echo "$RESPONSE" | jq -r '.[0].version' 2>/dev/null)
+    if [ -z "$VERSION_OBJ" ] || [ "$VERSION_OBJ" = "null" ]; then
         print_error "无法解析版本数据"
         return 1
     fi
 
-    SEMVER=$(echo "$VERSION_DATA" | jq -r '.semver')
-    print_info "  最新版本: $SEMVER"
+    SEMVER=$(echo "$VERSION_OBJ" | jq -r '.semver')
+    OPENJDK_VERSION=$(echo "$VERSION_OBJ" | jq -r '.openjdk_version')
+    print_info "  最新版本: $OPENJDK_VERSION"
 
     # 根据版本号格式解析
     if [ "$version" = "8" ]; then
-        UPDATE=$(echo "$SEMVER" | grep -oP '\d+u\d+' || echo "")
-        BUILD=$(echo "$SEMVER" | grep -oP 'b\d+' || echo "")
-        if [ -n "$UPDATE" ] && [ -n "$BUILD" ]; then
-            JAVA_CONFIGS[${version}_update]="$UPDATE"
+        # Java 8: openjdk_version "1.8.0_472-b08" -> 8u472 和 b08
+        SECURITY=$(echo "$OPENJDK_VERSION" | sed -n 's/.*_\([0-9]*\).*/\1/p')
+        BUILD=$(echo "$OPENJDK_VERSION" | sed -n 's/.*-\(b[0-9]*\).*/\1/p')
+        if [ -n "$SECURITY" ] && [ -n "$BUILD" ]; then
+            JAVA_CONFIGS[${version}_update]="8u${SECURITY}"
             JAVA_CONFIGS[${version}_build]="$BUILD"
         fi
     else
-        UPDATE=$(echo "$SEMVER" | grep -oP '\d+\.\d+\.\d+' || echo "")
-        BUILD=$(echo "$SEMVER" | grep -oP '\+\d+' | tr -d '+' || echo "")
+        # Java 11+: semver "17.0.17+10" 或 "21.0.9+10.0.LTS" -> 17.0.17 和 10
+        CLEAN_SEMVER=$(echo "$SEMVER" | sed 's/\.0\.LTS$//' | sed 's/-LTS$//')
+        UPDATE=$(echo "$CLEAN_SEMVER" | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+        BUILD=$(echo "$CLEAN_SEMVER" | sed -n 's/.*+\([0-9]*\).*/\1/p')
         if [ -n "$UPDATE" ] && [ -n "$BUILD" ]; then
             JAVA_CONFIGS[${version}_update]="$UPDATE"
             JAVA_CONFIGS[${version}_build]="$BUILD"

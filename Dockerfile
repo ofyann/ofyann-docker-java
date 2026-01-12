@@ -40,18 +40,35 @@ RUN mkdir -p /opt/jdk && \
 
 # 使用 jlink 创建精简的自定义运行时（仅包含必要模块，大幅减小镜像体积）
 # 可以通过 JAVA_MODULES 参数自定义模块
-ARG JAVA_MODULES="java.base,java.compiler,java.datatransfer,java.desktop,java.instrument,java.logging,java.management,java.naming,java.prefs,java.rmi,java.scripting,java.security.jgss,java.security.sasl,java.sql,java.xml,java.xml.crypto,jdk.unsupported,jdk.crypto.ec"
+# 包含 JDK 开发工具: jdk.compiler (javac), jdk.jdeps, jdk.jartool (jar) 等
+ARG JAVA_MODULES="java.base,java.compiler,java.datatransfer,java.desktop,java.instrument,java.logging,java.management,java.naming,java.prefs,java.rmi,java.scripting,java.security.jgss,java.security.sasl,java.sql,java.xml,java.xml.crypto,jdk.compiler,jdk.jdeps,jdk.jartool,jdk.javadoc,jdk.jlink,jdk.unsupported,jdk.crypto.ec"
 
-RUN if [ "$JAVA_MAJOR" != "8" ]; then \
+RUN if [ "$JAVA_MAJOR" != "8" ] && [ -d "/opt/jdk/jmods" ]; then \
+        echo "Detected JDK with jmods. Using jlink..." && \
+        # 注意：JDK 21+ 建议使用 --compress=zip-6 替代 --compress=2，但为了兼容旧版暂保留 2 或做额外判断
+        COMPRESS_ARG="--compress=2"; \
+        if [ "$JAVA_MAJOR" -ge "21" ]; then COMPRESS_ARG="--compress=zip-6"; fi; \
         /opt/jdk/bin/jlink \
             --add-modules ${JAVA_MODULES} \
             --strip-debug \
             --no-man-pages \
             --no-header-files \
-            --compress=2 \
+            ${COMPRESS_ARG} \
             --output /opt/jdk-minimal; \
     else \
-        # Java 8 不支持 jlink，直接删除不必要的文件
+        echo "No jmods found or JDK 8 detected. Using manual cleanup..." && \
+        # 手动精简 (兼容 JDK 8 和无 jmods 的高版本 JDK)
+        # 删除源代码和文档
+        rm -rf /opt/jdk/src.zip \
+               /opt/jdk/javafx-src.zip \
+               /opt/jdk/man \
+               /opt/jdk/demo \
+               /opt/jdk/sample \
+               /opt/jdk/include \
+               /opt/jdk/db \
+               /opt/jdk/lib/missioncontrol \
+               /opt/jdk/lib/visualvm; \
+        # 删除 JavaFX 和 Web Start (主要针对 JDK 8，高版本若不存在这些路径命令也不会报错)
         rm -rf /opt/jdk/jre/lib/plugin.jar \
                /opt/jdk/jre/lib/ext/jfxrt.jar \
                /opt/jdk/jre/bin/javaws \
@@ -67,7 +84,10 @@ RUN if [ "$JAVA_MAJOR" != "8" ]; then \
                /opt/jdk/jre/lib/amd64/libglass.so \
                /opt/jdk/jre/lib/amd64/libgstreamer-lite.so \
                /opt/jdk/jre/lib/amd64/libjavafx*.so \
-               /opt/jdk/jre/lib/amd64/libjfx*.so; \
+               /opt/jdk/jre/lib/amd64/libjfx*.so 2>/dev/null || true; \
+        # 删除调试符号
+        find /opt/jdk -name '*.diz' -delete 2>/dev/null || true; \
+        # 移动处理后的目录
         mv /opt/jdk /opt/jdk-minimal; \
     fi
 
@@ -95,6 +115,7 @@ COPY --from=jdk-builder /opt/jdk-minimal /opt/java
 # 安装运行时依赖和 tini
 ARG TINI_VERSION=v0.19.0
 ARG TIMEZONE=Asia/Shanghai
+ARG ARTHAS_VERSION=3.7.2
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         tzdata \
@@ -107,7 +128,31 @@ RUN apt-get update && \
         libxi6 \
         libxtst6 \
         curl \
-        wget && \
+        wget \
+        # 基础系统工具
+        vim \
+        nano \
+        less \
+        unzip \
+        zip \
+        # 网络工具包
+        net-tools \
+        iproute2 \
+        iputils-ping \
+        dnsutils \
+        tcpdump \
+        telnet \
+        # 系统调试工具
+        procps \
+        lsof \
+        strace \
+        htop \
+        smem \
+        sysstat \
+        # 通用工具
+        jq \
+        vim-tiny \
+        && \
     # 配置时区（可通过构建参数自定义）
     ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime && \
     echo "${TIMEZONE}" > /etc/timezone && \
@@ -125,6 +170,10 @@ RUN apt-get update && \
     esac && \
     wget -O /usr/bin/tini "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-static-${TINI_ARCH}" && \
     chmod +x /usr/bin/tini && \
+    # 下载并安装 Arthas
+    wget -O /tmp/arthas-bin.zip "https://github.com/alibaba/arthas/releases/download/${ARTHAS_VERSION}/arthas-bin.zip" && \
+    unzip -q /tmp/arthas-bin.zip -d /opt/ && \
+    rm /tmp/arthas-bin.zip && \
     # 清理缓存
     apt-get purge -y wget && \
     apt-get autoremove -y && \
@@ -136,7 +185,7 @@ ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     LC_ALL=en_US.UTF-8 \
     JAVA_HOME=/opt/java \
-    PATH=/opt/java/bin:$PATH
+    PATH=/opt/java/bin:/opt/arthas/bin:$PATH
 
 # 验证 Java 安装
 RUN java -version && javac -version
