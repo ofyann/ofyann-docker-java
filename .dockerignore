@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# GitHub
+.github
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build scripts
+build.sh
+
+# Old Dockerfiles
+Dockerfile.termurin-*
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
