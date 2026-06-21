@@ -1,10 +1,14 @@
 .PHONY: help build build-all test clean push
 
 # 默认配置
+# 镜像标签遵循命名规则 ofyann/java:<distro>-<version>[-<variant>]
 DOCKER_REGISTRY ?= docker.io
 IMAGE_NAME ?= ofyann/java
+DISTRO ?= temurin
 JAVA_VERSION ?= 17
 TIMEZONE ?= Asia/Shanghai
+# 完整标签 = 仓库:distro-version；精简版由 build.sh 自动追加 -minimal
+TAG ?= $(IMAGE_NAME):$(DISTRO)-$(JAVA_VERSION)
 
 # 颜色输出
 RED := \033[0;31m
@@ -19,49 +23,50 @@ help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "示例:"
-	@echo "  make build JAVA_VERSION=17        # 构建 Java 17"
+	@echo "  make build JAVA_VERSION=17        # 构建 temurin-17（默认 DISTRO=temurin）"
+	@echo "  make build DISTRO=temurin JAVA_VERSION=21  # 构建 temurin-21"
 	@echo "  make build-all                     # 构建所有版本"
 	@echo "  make test JAVA_VERSION=21         # 测试 Java 21"
 	@echo "  make push JAVA_VERSION=17         # 推送 Java 17"
 
 build: ## 构建指定版本的镜像 (JAVA_VERSION=17)
 	@echo "$(GREEN)构建 Java $(JAVA_VERSION) 镜像...$(NC)"
-	@TIMEZONE=$(TIMEZONE) ./build.sh $(JAVA_VERSION) $(IMAGE_NAME):$(JAVA_VERSION)
+	@TIMEZONE=$(TIMEZONE) ./build.sh $(JAVA_VERSION) $(TAG)
 
 build-all: ## 构建所有支持的 Java 版本
 	@echo "$(GREEN)构建所有 Java 版本...$(NC)"
 	@for version in 8 17 21 25; do \
 		echo "$(YELLOW)构建 Java $$version...$(NC)"; \
-		TIMEZONE=$(TIMEZONE) ./build.sh $$version $(IMAGE_NAME):$$version || exit 1; \
+		TIMEZONE=$(TIMEZONE) ./build.sh $$version $(IMAGE_NAME):$(DISTRO)-$$version || exit 1; \
 	done
 	@echo "$(GREEN)✓ 所有版本构建完成$(NC)"
 
 test: ## 测试指定版本的镜像 (JAVA_VERSION=17)
 	@echo "$(GREEN)测试 Java $(JAVA_VERSION) 镜像...$(NC)"
-	@docker run --rm $(IMAGE_NAME):$(JAVA_VERSION) java -version
-	@docker run --rm $(IMAGE_NAME):$(JAVA_VERSION) javac -version
-	@docker run --rm $(IMAGE_NAME):$(JAVA_VERSION) java --list-modules 2>/dev/null || true
+	@docker run --rm $(TAG) java -version
+	@docker run --rm $(TAG) javac -version
+	@docker run --rm $(TAG) java --list-modules 2>/dev/null || true
 	@echo "$(GREEN)✓ 测试通过$(NC)"
 
 test-all: ## 测试所有构建的镜像
 	@echo "$(GREEN)测试所有镜像...$(NC)"
 	@for version in 8 17 21 25; do \
 		echo "$(YELLOW)测试 Java $$version...$(NC)"; \
-		docker run --rm $(IMAGE_NAME):$$version java -version || exit 1; \
-		docker run --rm $(IMAGE_NAME):$$version javac -version || exit 1; \
+		docker run --rm $(IMAGE_NAME):$(DISTRO)-$$version java -version || exit 1; \
+		docker run --rm $(IMAGE_NAME):$(DISTRO)-$$version javac -version || exit 1; \
 	done
 	@echo "$(GREEN)✓ 所有测试通过$(NC)"
 
 push: ## 推送指定版本到镜像仓库 (JAVA_VERSION=17)
 	@echo "$(GREEN)推送 Java $(JAVA_VERSION) 镜像...$(NC)"
-	@docker push $(IMAGE_NAME):$(JAVA_VERSION)
+	@docker push $(TAG)
 	@echo "$(GREEN)✓ 推送完成$(NC)"
 
 push-all: ## 推送所有版本到镜像仓库
 	@echo "$(GREEN)推送所有镜像...$(NC)"
 	@for version in 8 17 21 25; do \
 		echo "$(YELLOW)推送 Java $$version...$(NC)"; \
-		docker push $(IMAGE_NAME):$$version || exit 1; \
+		docker push $(IMAGE_NAME):$(DISTRO)-$$version || exit 1; \
 	done
 	@echo "$(GREEN)✓ 所有镜像已推送$(NC)"
 
@@ -72,11 +77,11 @@ clean: ## 清理本地构建的镜像
 
 inspect: ## 查看指定版本镜像的详细信息 (JAVA_VERSION=17)
 	@echo "$(GREEN)镜像信息:$(NC)"
-	@docker inspect $(IMAGE_NAME):$(JAVA_VERSION) | jq '.[0] | {Id: .Id, Created: .Created, Size: .Size, Architecture: .Architecture, Os: .Os}'
+	@docker inspect $(TAG) | jq '.[0] | {Id: .Id, Created: .Created, Size: .Size, Architecture: .Architecture, Os: .Os}'
 
 shell: ## 进入指定版本镜像的交互式 shell (JAVA_VERSION=17)
 	@echo "$(GREEN)启动容器 shell...$(NC)"
-	@docker run -it --rm $(IMAGE_NAME):$(JAVA_VERSION) bash
+	@docker run -it --rm $(TAG) bash
 
 size: ## 显示所有镜像的大小
 	@echo "$(GREEN)镜像大小:$(NC)"
@@ -89,11 +94,11 @@ login: ## 登录 Docker Registry
 # 高级功能
 build-no-cache: ## 无缓存构建指定版本 (JAVA_VERSION=17)
 	@echo "$(GREEN)无缓存构建 Java $(JAVA_VERSION)...$(NC)"
-	@NO_CACHE=true TIMEZONE=$(TIMEZONE) ./build.sh $(JAVA_VERSION) $(IMAGE_NAME):$(JAVA_VERSION)
+	@NO_CACHE=true TIMEZONE=$(TIMEZONE) ./build.sh $(JAVA_VERSION) $(TAG)
 
-tag-latest: ## 将指定版本标记为 latest (JAVA_VERSION=17)
-	@echo "$(GREEN)标记 Java $(JAVA_VERSION) 为 latest...$(NC)"
-	@docker tag $(IMAGE_NAME):$(JAVA_VERSION) $(IMAGE_NAME):latest
+tag-latest: ## 将指定版本标记为 <distro>-latest (JAVA_VERSION=17)
+	@echo "$(GREEN)标记 Java $(JAVA_VERSION) 为 $(DISTRO)-latest...$(NC)"
+	@docker tag $(TAG) $(IMAGE_NAME):$(DISTRO)-latest
 	@echo "$(GREEN)✓ 标记完成$(NC)"
 
 # 默认目标

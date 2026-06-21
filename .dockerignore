@@ -25,9 +25,6 @@ Thumbs.db
 # Build scripts
 build.sh
 
-# Old Dockerfiles
-Dockerfile.termurin-*
-
 # Logs
 *.log
 

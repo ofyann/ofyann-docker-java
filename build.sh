@@ -16,12 +16,22 @@
 #   BUILD_VARIANT=full ./build.sh 17        # 只构建完整版
 #   BUILD_VARIANT=minimal ./build.sh 17     # 只构建精简版
 #   NO_CACHE=true ./build.sh 17             # 无缓存构建两个版本
+#
+# 说明:
+#   本脚本按宿主架构从 Adoptium API 获取下载直链与 SHA256，作为 build-arg 传入
+#   （Dockerfile 收到后会跳过自身的 API 请求）。多架构构建请通过 CI 的
+#   docker buildx 多平台构建完成（Dockerfile 会按 TARGETARCH 自行取链）。
+#   完整版与精简版由同一 Dockerfile 的不同 build target（full / minimal）实现。
 
 set -e
 
 # 默认值
+# DISTRO: JDK 发行版（temurin/zulu/corretto/liberica...），影响默认镜像标签前缀
+# 注：当前 Dockerfile 仅实现了 temurin 的下载逻辑；其他发行版需在 jdk-builder 阶段按 DISTRO 切换源
+DISTRO=${DISTRO:-temurin}
 JAVA_VERSION=${1:-17}
-IMAGE_TAG=${2:-"ofyann/java:${JAVA_VERSION}"}
+# 默认标签遵循命名规则 ofyann/java:<distro>-<version>[-<variant>]
+IMAGE_TAG=${2:-"ofyann/java:${DISTRO}-${JAVA_VERSION}"}
 BUILD_VARIANT=${BUILD_VARIANT:-both}  # full, minimal, both
 NO_CACHE=${NO_CACHE:-false}
 TIMEZONE=${TIMEZONE:-Asia/Shanghai}
@@ -44,64 +54,98 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 自动获取最新版本或使用手动配置
+# 宿主架构 → Adoptium 架构名
+detect_adopt_arch() {
+    case "$(uname -m)" in
+        x86_64)         echo "x64" ;;
+        aarch64|arm64)  echo "aarch64" ;;
+        armv7l|armhf)   echo "arm" ;;
+        *) print_error "不支持的宿主架构: $(uname -m)"; return 1 ;;
+    esac
+}
+
+# 验证 Java 版本：先校验为纯数字（拒绝含空格/特殊字符的输入），再校验在支持列表内
+SUPPORTED_VERSIONS="8 17 21 25"
+case "$JAVA_VERSION" in
+    ''|*[!0-9]*)
+        print_error "非法的 Java 版本: ${JAVA_VERSION}（必须为纯数字）"
+        print_info "支持的版本: $SUPPORTED_VERSIONS"
+        exit 1
+        ;;
+esac
+case " $SUPPORTED_VERSIONS " in
+    *" $JAVA_VERSION "*) : ;;
+    *)
+        print_error "不支持的 Java 版本: ${JAVA_VERSION}"
+        print_info "支持的版本: $SUPPORTED_VERSIONS"
+        exit 1
+        ;;
+esac
+
+# 自动获取最新版本（直链、SHA256、版本号），全部直接取自 Adoptium API，无需手工拼 URL
 fetch_version() {
     local version=$1
-    print_info "正在获取 Java $version 的最新版本..."
+    local adopt_arch
+    adopt_arch=$(detect_adopt_arch) || return 1
 
-    # 从 Adoptium API 获取最新版本（过滤标准 JDK）
-    API_URL="https://api.adoptium.net/v3/assets/latest/${version}/hotspot?image_type=jdk&os=linux&architecture=x64"
-    RESPONSE=$(curl -s "$API_URL" 2>/dev/null)
+    print_info "正在获取 Java $version ($adopt_arch) 的最新版本..."
 
-    if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "[]" ]; then
+    local api_url="https://api.adoptium.net/v3/assets/latest/${version}/hotspot?image_type=jdk&os=linux&architecture=${adopt_arch}"
+    local response
+    response=$(curl -fsSL "$api_url" 2>/dev/null) || {
+        print_error "无法从 API 获取 Java $version 版本信息"
+        return 1
+    }
+
+    if [ -z "$response" ] || [ "$response" = "[]" ]; then
         print_error "无法从 API 获取 Java $version 版本信息"
         return 1
     fi
 
-    # 解析版本信息
-    VERSION_OBJ=$(echo "$RESPONSE" | jq -r '.[0].version' 2>/dev/null)
-    if [ -z "$VERSION_OBJ" ] || [ "$VERSION_OBJ" = "null" ]; then
-        print_error "无法解析版本数据"
+    OPENJDK_VERSION=$(printf '%s' "$response" | jq -r '.[0].version.openjdk_version')
+    SEMVER=$(printf '%s' "$response" | jq -r '.[0].version.semver // empty')
+    JAVA_URL=$(printf '%s' "$response" | jq -r '.[0].binary.package.link')
+    JAVA_SHA256=$(printf '%s' "$response" | jq -r '.[0].binary.package.checksum')
+
+    if [ -z "$JAVA_URL" ] || [ "$JAVA_URL" = "null" ] || [ -z "$JAVA_SHA256" ] || [ "$JAVA_SHA256" = "null" ]; then
+        print_error "无法解析下载链接或校验和"
         return 1
     fi
 
-    SEMVER=$(echo "$VERSION_OBJ" | jq -r '.semver')
-    OPENJDK_VERSION=$(echo "$VERSION_OBJ" | jq -r '.openjdk_version')
     print_info "  最新版本: $OPENJDK_VERSION"
 
-    # 根据版本号格式解析
+    # 解析具体版本标签（仅用于日志展示；直接取结构化字段，避免脆弱的 sed 正则）
     if [ "$version" = "8" ]; then
-        # Java 8: openjdk_version "1.8.0_472-b08" -> 8u472 和 b08
-        SECURITY=$(echo "$OPENJDK_VERSION" | sed -n 's/.*_\([0-9]*\).*/\1/p')
-        BUILD=$(echo "$OPENJDK_VERSION" | sed -n 's/.*-\(b[0-9]*\).*/\1/p')
-        if [ -n "$SECURITY" ] && [ -n "$BUILD" ]; then
-            JAVA_CONFIGS[${version}_update]="8u${SECURITY}"
-            JAVA_CONFIGS[${version}_build]="$BUILD"
-        fi
+        # Java 8: openjdk_version "1.8.0_492-b09" -> 8u492b09
+        local security build
+        security=$(printf '%s' "$OPENJDK_VERSION" | sed -n 's/.*_\([0-9]*\).*/\1/p')
+        build=$(printf '%s' "$OPENJDK_VERSION" | sed -n 's/.*-\(b[0-9]*\).*/\1/p')
+        [ -n "$security" ] && [ -n "$build" ] && FULL_VERSION="8u${security}${build}"
     else
-        # Java 11+: semver "17.0.17+10" 或 "21.0.9+10.0.LTS" -> 17.0.17 和 10
-        CLEAN_SEMVER=$(echo "$SEMVER" | sed 's/\.0\.LTS$//' | sed 's/-LTS$//')
-        UPDATE=$(echo "$CLEAN_SEMVER" | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
-        BUILD=$(echo "$CLEAN_SEMVER" | sed -n 's/.*+\([0-9]*\).*/\1/p')
-        if [ -n "$UPDATE" ] && [ -n "$BUILD" ]; then
-            JAVA_CONFIGS[${version}_update]="$UPDATE"
-            JAVA_CONFIGS[${version}_build]="$BUILD"
+        # Java 11+: 优先用结构化 version.security/build 字段，回退到 semver 解析
+        local major minor security build
+        major=$(printf '%s' "$response" | jq -r '.[0].version.major // empty')
+        minor=$(printf '%s' "$response" | jq -r '.[0].version.minor // empty')
+        security=$(printf '%s' "$response" | jq -r '.[0].version.security // empty')
+        build=$(printf '%s' "$response" | jq -r '.[0].version.build // empty')
+        if [ -n "$major" ] && [ -n "$security" ] && [ -n "$build" ]; then
+            if [ "$minor" = "0" ] || [ -z "$minor" ]; then
+                FULL_VERSION="${major}.0.${security}_${build}"
+            else
+                FULL_VERSION="${major}.${minor}.${security}_${build}"
+            fi
+        else
+            # 回退：semver "17.0.19+10" 或 "21.0.9+10.0.LTS" -> 17.0.19_10
+            local clean_semver update
+            clean_semver=$(printf '%s' "$SEMVER" | sed 's/\.0\.LTS$//' | sed 's/-LTS$//')
+            update=$(printf '%s' "$clean_semver" | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+            build=$(printf '%s' "$clean_semver" | sed -n 's/.*+\([0-9]*\).*/\1/p')
+            [ -n "$update" ] && [ -n "$build" ] && FULL_VERSION="${update}_${build}"
         fi
     fi
 
     return 0
 }
-
-# 版本配置
-declare -A JAVA_CONFIGS
-
-# 验证 Java 版本
-SUPPORTED_VERSIONS="8 17 21 25"
-if [[ ! $SUPPORTED_VERSIONS =~ (^|[[:space:]])$JAVA_VERSION($|[[:space:]]) ]]; then
-    print_error "不支持的 Java 版本: ${JAVA_VERSION}"
-    print_info "支持的版本: $SUPPORTED_VERSIONS"
-    exit 1
-fi
 
 # 尝试自动获取版本
 if ! fetch_version "$JAVA_VERSION"; then
@@ -110,25 +154,12 @@ if ! fetch_version "$JAVA_VERSION"; then
     exit 1
 fi
 
-# 获取版本信息
-JAVA_UPDATE="${JAVA_CONFIGS[${JAVA_VERSION}_update]}"
-JAVA_BUILD="${JAVA_CONFIGS[${JAVA_VERSION}_build]}"
-JAVA_SHA256="${JAVA_CONFIGS[${JAVA_VERSION}_sha256]}"
-
-# 构建下载 URL
-if [ "$JAVA_VERSION" = "8" ]; then
-    URL_UPDATE="${JAVA_UPDATE//./_}"
-    JAVA_URL="https://github.com/adoptium/temurin${JAVA_VERSION}-binaries/releases/download/jdk${URL_UPDATE}-${JAVA_BUILD}/OpenJDK${JAVA_VERSION}U-jdk_x64_linux_hotspot_${URL_UPDATE}${JAVA_BUILD}.tar.gz"
-else
-    JAVA_URL="https://github.com/adoptium/temurin${JAVA_VERSION}-binaries/releases/download/jdk-${JAVA_UPDATE}%2B${JAVA_BUILD}/OpenJDK${JAVA_VERSION}U-jdk_x64_linux_hotspot_${JAVA_UPDATE//./_}_${JAVA_BUILD}.tar.gz"
-fi
-
 print_info "======================================"
 print_info "  JDK Docker 镜像构建"
 print_info "======================================"
 print_info "Java 版本: ${JAVA_VERSION}"
-print_info "Java 更新: ${JAVA_UPDATE}"
-print_info "构建号: ${JAVA_BUILD}"
+print_info "具体版本: ${FULL_VERSION:-未知}"
+print_info "架构: $(detect_adopt_arch)"
 print_info "镜像标签: ${IMAGE_TAG}"
 print_info "下载 URL: ${JAVA_URL}"
 print_info "======================================"
@@ -137,10 +168,8 @@ print_info "======================================"
 BUILD_ARGS=(
     --build-arg "JAVA_MAJOR=${JAVA_VERSION}"
     --build-arg "JAVA_VERSION=${JAVA_VERSION}"
-    --build-arg "JAVA_UPDATE=${JAVA_UPDATE}"
-    --build-arg "JAVA_BUILD=${JAVA_BUILD}"
     --build-arg "JAVA_URL=${JAVA_URL}"
-    --build-arg "JAVA_SHA256=${JAVA_SHA256:-}"
+    --build-arg "JAVA_SHA256=${JAVA_SHA256}"
     --build-arg "TIMEZONE=${TIMEZONE}"
     --build-arg "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     --build-arg "VCS_REF=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
@@ -152,38 +181,36 @@ if [ "$NO_CACHE" = "true" ]; then
 fi
 
 # 构建镜像的函数
+# 参数: variant(full|minimal) tag description
 build_image() {
     local variant=$1
-    local dockerfile=$2
-    local tag=$3
-    local description=$4
+    local tag=$2
+    local description=$3
 
     print_info "======================================"
     print_info "  构建 ${description}"
     print_info "======================================"
-    print_info "Dockerfile: ${dockerfile}"
+    print_info "Dockerfile: Dockerfile (target=${variant})"
     print_info "镜像标签: ${tag}"
     print_info ""
 
-    # 构建镜像
+    # 构建镜像（用 if 包裹，避免 set -e 直接退出导致失败分支成为死代码）
     print_info "开始构建镜像..."
-    docker build \
+    if docker build \
+        --target "${variant}" \
         "${BUILD_ARGS[@]}" \
         -t "${tag}" \
-        -f "${dockerfile}" \
-        .
-
-    # 验证构建
-    if [ $? -eq 0 ]; then
+        -f Dockerfile \
+        . ; then
         print_info "✓ ${description} 构建成功！"
         print_info ""
         print_info "测试镜像..."
-        docker run --rm "${tag}" java -version
-
-        # 完整版测试 javac
-        if [ "$variant" = "full" ]; then
-            docker run --rm "${tag}" javac -version 2>/dev/null || print_warn "javac 不可用（JDK 8 可能正常）"
+        # 测试门：java/javac 验证失败则视为构建失败（显式处理，因 set -e 在 if 上下文被挂起）
+        if ! docker run --rm "${tag}" java -version; then
+            print_error "镜像验证失败: java -version 异常"
+            return 1
         fi
+        docker run --rm "${tag}" javac -version 2>/dev/null || print_warn "javac 不可用"
 
         print_info ""
         print_info "镜像信息:"
@@ -205,7 +232,7 @@ if [ "$BUILD_VARIANT" = "full" ] || [ "$BUILD_VARIANT" = "both" ]; then
     print_info "  构建完整版（带 Arthas）"
     print_info "======================================"
     FULL_TAG="${IMAGE_TAG}"
-    if ! build_image "full" "Dockerfile" "${FULL_TAG}" "完整版（带 Arthas 和开发工具）"; then
+    if ! build_image "full" "${FULL_TAG}" "完整版（带 Arthas 和开发工具）"; then
         exit 1
     fi
 fi
@@ -214,17 +241,18 @@ if [ "$BUILD_VARIANT" = "minimal" ] || [ "$BUILD_VARIANT" = "both" ]; then
     print_info "======================================"
     print_info "  构建精简版（纯运行时）"
     print_info "======================================"
-    # 如果 IMAGE_TAG 已经有 -minimal 后缀，直接使用；否则添加
+    # 生成精简版标签：已含 -minimal 后缀直接用；否则在版本部分追加 -minimal
     if [[ "${IMAGE_TAG}" == *"-minimal" ]]; then
         MINIMAL_TAG="${IMAGE_TAG}"
+    elif [[ "${IMAGE_TAG}" == *:* ]]; then
+        # 含冒号：repo:tag -> repo:tag-minimal
+        MINIMAL_TAG="${IMAGE_TAG}-minimal"
     else
-        # 提取基础标签（去除版本号）并添加 -minimal
-        BASE_TAG=$(echo "${IMAGE_TAG}" | sed 's/:.*$//')
-        VERSION_TAG=$(echo "${IMAGE_TAG}" | sed 's/^.*://')
-        MINIMAL_TAG="${BASE_TAG}:${VERSION_TAG}-minimal"
+        # 无冒号的自定义标签：追加 :latest-minimal
+        MINIMAL_TAG="${IMAGE_TAG}:latest-minimal"
     fi
 
-    if ! build_image "minimal" "Dockerfile.minimal" "${MINIMAL_TAG}" "精简版（纯运行时）"; then
+    if ! build_image "minimal" "${MINIMAL_TAG}" "精简版（纯运行时）"; then
         exit 1
     fi
 fi

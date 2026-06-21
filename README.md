@@ -4,39 +4,54 @@
 
 ## 特性
 
-- ✅ **两个版本可选**:
-  - **完整版**（Dockerfile）: 包含 Arthas 诊断工具和开发工具，约 200-240MB
-  - **精简版**（Dockerfile.minimal）: 纯运行时环境，无 Arthas，约 120-150MB
-- ✅ **自动构建**: 每日自动检测新版本并构建
-- ✅ **镜像最小化**: 使用 jlink 优化，大幅减小体积
+- ✅ **两个版本可选**（均为完整 JDK，保留全部 `java.*`/`jdk.*` 模块，不再用 jlink 裁剪，避免缺模块运行异常；由同一 Dockerfile 的不同 build target 实现）:
+  - **完整版**（`--target full`）: 含 Arthas 诊断工具与开发工具，约 230-260MB
+  - **精简版**（`--target minimal`）: 纯运行时环境，无 Arthas/编辑器，约 190-210MB
+- ✅ **多架构支持**: `linux/amd64`、`linux/arm64`、`linux/arm`(armv7)，CI 自动构建多架构 manifest
+- ✅ **自动构建**: 每周自动检测新版本并多架构构建（push 触发仅 amd64 验证）
 - ✅ **多版本支持**: Java 8, 17, 21, 25
+- ✅ **供应链校验**: 下载 JDK 时按架构校验 SHA256（取自 Adoptium API）
 - ✅ **时区支持**: 默认 Asia/Shanghai，可自定义
-- ✅ **UTF-8 支持**: 完整版支持中文，精简版仅英文
+- ✅ **UTF-8 与中文支持**: 默认 `en_US.UTF-8`（中文显示正常），完整版额外生成 `zh_CN.UTF-8` 可切换中文 locale 语义
+- ✅ **时区**: 默认 `Asia/Shanghai`(+08)，同时设置 `TZ` 环境变量与 `/etc/localtime`，跨 JDK 版本可靠
 
 ## 支持的版本
+
+> 下表中的具体小版本号（如 `17.0.17_10`）为示例，实际版本由 Adoptium API 动态获取，以 [Docker Hub tags](https://hub.docker.com/r/ofyann/java/tags) 为准。
 
 ### 完整版（带 Arthas）
 
 | Java 版本 | 镜像标签 | 说明 |
 |-----------|---------|------|
-| Java 8 | `ofyann/java:8`, `ofyann/java:8u472b08` | LTS 版本 |
-| Java 17 | `ofyann/java:17`, `ofyann/java:17.0.17_10` | LTS 版本 |
-| Java 21 | `ofyann/java:21`, `ofyann/java:21.0.9_10` | LTS 版本 |
-| Java 25 | `ofyann/java:25`, `ofyann/java:25.0.1_8` | 最新版本 |
+| Java 8 | `ofyann/java:temurin-8`, `ofyann/java:temurin-8u472b08` | LTS 版本 |
+| Java 17 | `ofyann/java:temurin-17`, `ofyann/java:temurin-17.0.17_10` | LTS 版本 |
+| Java 21 | `ofyann/java:temurin-21`, `ofyann/java:temurin-21.0.9_10` | LTS 版本 |
+| Java 25 | `ofyann/java:temurin-25`, `ofyann/java:temurin-25.0.1_8` | 最新版本 |
 
 ### 精简版（纯运行时）
 
 | Java 版本 | 镜像标签 | 说明 |
 |-----------|---------|------|
-| Java 8 | `ofyann/java:8-minimal` | LTS 精简版 |
-| Java 17 | `ofyann/java:17-minimal` | LTS 精简版 |
-| Java 21 | `ofyann/java:21-minimal` | LTS 精简版 |
-| Java 25 | `ofyann/java:25-minimal` | 精简版 |
+| Java 8 | `ofyann/java:temurin-8-minimal` | LTS 精简版 |
+| Java 17 | `ofyann/java:temurin-17-minimal` | LTS 精简版 |
+| Java 21 | `ofyann/java:temurin-21-minimal` | LTS 精简版 |
+| Java 25 | `ofyann/java:temurin-25-minimal` | 精简版 |
 
 **标签说明:**
-- `ofyann/java:8` - 完整版，大版本最新（会随版本更新）
-- `ofyann/java:8-minimal` - 精简版，大版本最新
-- `ofyann/java:8u472b08` - 完整版，具体小版本（固定不变）
+- `ofyann/java:temurin-8` - 完整版，大版本最新（会随版本更新）
+- `ofyann/java:temurin-8-minimal` - 精简版，大版本最新
+- `ofyann/java:temurin-8u472b08` - 完整版，具体小版本（固定不变）
+
+### 镜像命名规则
+
+所有镜像遵循统一命名：`ofyann/java:<distro>-<version>[-<variant>]`
+
+- `<distro>`：JDK 发行版（`temurin` / `zulu` / `corretto` / `liberica` 等，当前仅 `temurin`）
+- `<version>`：Java 大版本（`8`/`17`/`21`/`25`，滚动）或具体小版本（`17.0.19_10`、`8u492b09`，固定）
+- `<variant>`：可选变体，省略=完整版；`-minimal`=精简运行时
+- 架构不进标签，通过多架构 manifest list 自动选择（amd64/arm64/arm）
+
+> **迁移提示**：早期版本使用过无 distro 前缀的旧标签（如 `ofyann/java:17`），现已弃用不再更新。请在 `FROM` 中迁移到 `ofyann/java:temurin-17`。完整规则见 [AGENTS.md §6](./AGENTS.md)。
 
 ## 快速使用
 
@@ -44,33 +59,33 @@
 
 ```bash
 # 拉取完整版（带 Arthas 诊断工具）
-docker pull ofyann/java:17
+docker pull ofyann/java:temurin-17
 
 # 拉取精简版（纯运行时，更小体积）
-docker pull ofyann/java:17-minimal
+docker pull ofyann/java:temurin-17-minimal
 
 # 拉取特定版本
-docker pull ofyann/java:17.0.17_10
+docker pull ofyann/java:temurin-17.0.17_10
 ```
 
 ### 运行容器
 
 ```bash
 # 查看 Java 版本
-docker run --rm ofyann/java:17 java -version
+docker run --rm ofyann/java:temurin-17 java -version
 
 # 进入容器（完整版有 vim 等工具）
-docker run -it --rm ofyann/java:17 bash
+docker run -it --rm ofyann/java:temurin-17 bash
 
 # 进入精简版容器（工具较少）
-docker run -it --rm ofyann/java:17-minimal bash
+docker run -it --rm ofyann/java:temurin-17-minimal bash
 ```
 
 ### 作为基础镜像
 
 ```dockerfile
 # 生产环境：使用精简版（体积更小）
-FROM ofyann/java:17-minimal
+FROM ofyann/java:temurin-17-minimal
 
 WORKDIR /app
 COPY target/myapp.jar app.jar
@@ -80,7 +95,7 @@ CMD ["java", "-jar", "app.jar"]
 
 ```dockerfile
 # 开发/调试环境：使用完整版（带 Arthas）
-FROM ofyann/java:17
+FROM ofyann/java:temurin-17
 
 WORKDIR /app
 COPY target/myapp.jar app.jar
@@ -137,21 +152,31 @@ make test JAVA_VERSION=17
 ### 使用 Docker 命令
 
 ```bash
-# 构建完整版（带 Arthas）
+# 构建完整版（带 Arthas）— 默认按宿主架构自动获取 JDK；默认 target 即 full
 docker build \
   --build-arg JAVA_MAJOR=17 \
   --build-arg TIMEZONE=Asia/Shanghai \
-  -t ofyann/java:17 \
+  -t ofyann/java:temurin-17 \
   .
 
 # 构建精简版（纯运行时）
 docker build \
+  --target minimal \
   --build-arg JAVA_MAJOR=17 \
   --build-arg TIMEZONE=Asia/Shanghai \
-  -f Dockerfile.minimal \
-  -t ofyann/java:17-minimal \
+  -t ofyann/java:temurin-17-minimal \
   .
+
+# 多架构构建（需 buildx + QEMU）
+docker buildx build \
+  --target full \
+  --platform linux/amd64,linux/arm64,linux/arm \
+  --build-arg JAVA_MAJOR=17 \
+  -t ofyann/java:temurin-17 \
+  --push .
 ```
+
+> 说明：Dockerfile 收到 `JAVA_URL`/`JAVA_SHA256` 时直接使用（build.sh 本地构建按宿主架构传入）；未传入时按 `TARGETARCH` 自动从 Adoptium API 获取对应架构的下载直链与校验和（多架构构建用此路径）。
 
 ## 自定义配置
 
@@ -161,39 +186,32 @@ docker build \
 # 构建时指定
 docker build \
   --build-arg TIMEZONE=America/New_York \
-  -t ofyann/java:17 \
+  -t ofyann/java:temurin-17 \
   .
 
 # 或运行时映射
-docker run -e TZ=America/New_York ofyann/java:17 date
+docker run -e TZ=America/New_York ofyann/java:temurin-17 date
 ```
 
-### 自定义 JLink 模块
+### 模块说明
 
-减小镜像大小，仅包含需要的模块:
-
-```bash
-docker build \
-  --build-arg JAVA_MAJOR=17 \
-  --build-arg JAVA_MODULES="java.base,java.logging" \
-  -t ofyann/java:17-minimal \
-  .
-```
+镜像不再使用 jlink 裁剪，而是保留完整的 Eclipse Temurin JDK（仅删除源码/文档/示例/法律文件/调试符号等非模块内容）。因此包含全部 `java.*`/`jdk.*` 模块，不会出现因缺模块（如 `java.net.http`、`java.desktop`、`java.scripting`、`jdk.zipfs` 等）导致的运行异常。
 
 查看包含的模块:
 
 ```bash
-docker run --rm ofyann/java:17 java --list-modules
+docker run --rm ofyann/java:temurin-17 java --list-modules
 ```
 
 ## GitHub Actions 自动构建
 
 ### 工作流程
 
-1. **每天自动构建**: UTC 00:00 检查新版本
-2. **自动检测**: 从 Adoptium API 获取最新版本
-3. **增量构建**: 仅构建新版本或更新的版本
-4. **双标签**: 同时推送大版本和具体版本标签
+1. **每周自动构建**: 每周一 UTC 00:00 全量多架构构建（push 到 main 仅 amd64 验证，不推送）
+2. **自动检测**: 从 Adoptium API 获取最新版本号（用于打具体版本标签；下载直链与 SHA256 由 Dockerfile 按架构自行获取）
+3. **增量构建**: 仅构建新版本或更新的版本（通过 manifest 检查跳过已存在的多架构镜像）
+4. **多架构**: 单次 buildx 构建同时产出 amd64 / arm64 / arm
+5. **双标签**: 同时推送大版本和具体版本标签
 
 ### 配置步骤
 
@@ -217,7 +235,7 @@ docker run --rm ofyann/java:17 java --list-modules
 
 ### 构建触发条件
 
-- ✅ 每天自动检查新版本
+- ✅ 每周自动检查新版本（schedule），push 到 main 触发 amd64 快速验证
 - ✅ 推送到 main 分支
 - ✅ 手动触发 workflow
 
@@ -225,13 +243,12 @@ docker run --rm ofyann/java:17 java --list-modules
 
 ### 包含的软件
 
-#### 完整版（Dockerfile）
+#### 完整版（Dockerfile `--target full`）
 
-**Java 模块:**
-- Eclipse Temurin JDK（通过 jlink 精简）
-- 运行时模块：`java.base`, `java.logging`, `java.management`, `java.naming`, `java.rmi`, `java.sql`, `java.xml`
-- 开发/诊断模块：`jdk.attach`, `jdk.compiler`, `jdk.jdi`, `jdk.jartool`（支持 Arthas）
-- 加密模块：`jdk.crypto.ec`, `jdk.unsupported`
+**Java:**
+- Eclipse Temurin **完整 JDK**（不再使用 jlink 裁剪，保留全部 `java.*`/`jdk.*` 模块与 `javac` 等开发工具）
+- 仅删除源码、文档、示例、法律文件、调试符号等非模块内容
+- 包含 Arthas 所需模块：`jdk.attach`、`jdk.jdi`、`jdk.compiler` 等（完整 JDK 天然具备）
 
 **系统工具:**
 - Tini - 轻量级初始化系统
@@ -256,17 +273,16 @@ docker run --rm ofyann/java:17 java --list-modules
 - fontconfig - 字体配置（Java GUI 应用必需）
 
 **语言支持:**
-- UTF-8 英文和中文 locale
+- UTF-8 编码（中文显示正常）
+- 生成 `en_US.UTF-8` 与 `zh_CN.UTF-8`，默认 `LANG=en_US.UTF-8`，可 `docker run -e LANG=zh_CN.UTF-8` 切换中文 locale 语义
 
 ---
 
-#### 精简版（Dockerfile.minimal）
+#### 精简版（Dockerfile `--target minimal`）
 
-**Java 模块（最小集）:**
-- Eclipse Temurin JDK（通过 jlink 极限精简）
-- 仅运行时模块：`java.base`, `java.logging`, `java.management`, `java.naming`, `java.sql`, `java.xml`
-- 加密模块：`jdk.crypto.ec`, `jdk.unsupported`
-- **不包含**：开发工具、调试模块、Arthas 支持
+**Java:**
+- Eclipse Temurin **完整 JDK**（与完整版相同的裁剪策略，保留全部模块与 `javac`）
+- 仅删除非模块内容，不含 Arthas 与编辑器等附加工具
 
 **系统工具:**
 - Tini - 轻量级初始化系统
@@ -284,7 +300,8 @@ docker run --rm ofyann/java:17 java --list-modules
 - fontconfig - 字体配置
 
 **语言支持:**
-- UTF-8 英文 locale（不含中文以减小体积）
+- UTF-8 编码（中文显示正常）
+- 仅生成 `en_US.UTF-8`（为减体积，不含 `zh_CN` locale；如需中文 locale 语义请用完整版）
 
 **不包含:**
 - ❌ Arthas（无法使用 Java 诊断功能）
@@ -293,44 +310,63 @@ docker run --rm ofyann/java:17 java --list-modules
 - ❌ jq（无 JSON 工具）
 - ❌ 中文 locale
 
+> 注：精简版同样包含完整 JDK（含 `javac`），仅减少了附加系统工具与 Arthas。
+
 ### 环境变量
 
 ```bash
 JAVA_HOME=/opt/java
-PATH=/opt/java/bin:$PATH
-LANG=en_US.UTF-8
-LC_ALL=en_US.UTF-8
-TZ=Asia/Shanghai  # 默认时区
+PATH=/opt/java/bin:/opt/arthas:$PATH   # 完整版含 /opt/arthas；精简版为 /opt/java/bin:$PATH
+LANG=en_US.UTF-8                         # UTF-8 编码，中文显示正常
+LANGUAGE=en_US:en
+TZ=Asia/Shanghai                         # 显式时区，与 /etc/localtime 一致，跨 JDK 版本兜底 +8
 ```
+
+> 关于 locale：默认 `en_US.UTF-8`。**UTF-8 编码下中文字符显示正常**，与 locale 数量无关。
+> 区别在于 Locale 语义：日期/数字格式化、异常消息语言默认英文。
+> 完整版同时生成 `zh_CN.UTF-8`，运行时可切换中文 locale 语义：
+> ```bash
+> docker run -e LANG=zh_CN.UTF-8 ofyann/java:temurin-17
+> ```
+> 精简版仅生成 `en_US.UTF-8`（为减体积），如需中文 locale 语义请用完整版。
 
 ### 镜像大小
 
+> 以下为估算值（基于裁剪后的完整 JDK + Debian slim），实际以 Docker Hub 为准。各架构体积相近。
+
 #### 完整版（带 Arthas 和开发工具）
 
-- Java 8: ~210MB (手动精简 + Arthas + 工具)
-- Java 17: ~200MB (jlink 精简 + Arthas + 工具)
-- Java 21: ~210MB (jlink 精简 + Arthas + 工具)
-- Java 25: ~210MB (jlink 精简 + Arthas + 工具)
+- Java 8: ~230MB
+- Java 17: ~240MB
+- Java 21: ~250MB
+- Java 25: ~250MB
 
-#### 精简版（纯运行时）
+#### 精简版（纯运行时，无 Arthas/编辑器）
 
-- Java 8: ~160MB (手动精简，仅运行时)
-- Java 17: ~120MB (jlink 极限精简，仅运行时)
-- Java 21: ~130MB (jlink 极限精简，仅运行时)
-- Java 25: ~130MB (jlink 极限精简，仅运行时)
+- Java 8: ~190MB
+- Java 17: ~200MB
+- Java 21: ~210MB
+- Java 25: ~210MB
 
 **对比**:
 - 官方完整 JDK: ~450MB
-- 完整版: ~200-210MB（节省 53-56%）
-- 精简版: ~120-160MB（节省 64-73%）
+- 完整版: ~230-250MB（节省约 45%）
+- 精简版: ~190-210MB（节省约 53%）
 
-**优化效果**（相比之前版本）:
-- 删除 X11 库: 减少 50-80MB
-- 删除冗余工具: 减少 10-20MB
-- 精简 JAVA_MODULES: 减少 10-20MB
-- **总计节省**: 70-120MB
+**优化手段**:
+- 删除源码、文档、示例、法律文件、调试符号
+- 删除 `jmods`（运行时不需要，模块已在 `lib/modules`）
+- 多阶段构建，构建依赖不进入最终镜像
 
 ## 限制说明
+
+### 架构支持
+
+CI 同时构建并推送 **`linux/amd64`**、**`linux/arm64`**、**`linux/arm`(armv7)** 三种架构的镜像（同一标签的多架构 manifest list，`docker pull` 会自动选择匹配宿主的架构）。
+
+- amd64：GitHub runner 原生构建
+- arm64 / arm：通过 QEMU 仿真构建，速度较慢但功能完整
+- arm64/arm 的运行时测试仅验证构建成功（QEMU 仿真运行较慢，不单独跑测试套件）
 
 ### GitHub Actions 限制
 
@@ -379,7 +415,7 @@ TZ=Asia/Shanghai  # 默认时区
 使用完整的版本标签确保版本固定:
 
 ```dockerfile
-FROM ofyann/java:17.0.17_10
+FROM ofyann/java:temurin-17.0.17_10
 ```
 
 ### 2. 如何查看可用的版本？
@@ -409,13 +445,13 @@ curl -s "https://api.adoptium.net/v3/assets/latest/17/hotspot" | jq
 运行时修改:
 
 ```bash
-docker run -e TZ=America/New_York ofyann/java:17 date
+docker run -e TZ=America/New_York ofyann/java:temurin-17 date
 ```
 
 或映射宿主机时区:
 
 ```bash
-docker run -v /etc/localtime:/etc/localtime:ro ofyann/java:17 date
+docker run -v /etc/localtime:/etc/localtime:ro ofyann/java:temurin-17 date
 ```
 
 ## 版本选择建议
@@ -443,17 +479,15 @@ ofyann-docker-java/
 ├── .github/
 │   └── workflows/
 │       └── docker-build.yml       # GitHub Actions 工作流
-├── Dockerfile                     # 完整版 Dockerfile（带 Arthas）
-├── Dockerfile.minimal             # 精简版 Dockerfile（纯运行时）
-├── build.sh                       # 本地构建脚本
-├── test-version-parsing.sh        # 版本解析测试
+├── Dockerfile                     # 单 Dockerfile 双 target：full（带 Arthas）/ minimal（纯运行时）
+├── build.sh                       # 本地构建脚本（自动获取版本，按 target 切换变体）
 ├── Makefile                       # Make 命令
 ├── README.md                      # 本文件
-├── USAGE.md                       # 使用示例
 ├── TOOLS.md                       # 开发调试工具说明
 ├── CHANGELOG.md                   # 更新日志
-├── FIXES.md                       # 问题修复记录
-├── JAVA8_OPTIMIZATION.md          # Java 8 优化说明
+├── AGENTS.md                      # AI 助手项目上下文
+├── CLAUDE.md                      # 指向 AGENTS.md
+├── LICENSE                        # MIT
 ├── .dockerignore                  # Docker 忽略文件
 └── .gitignore                     # Git 忽略文件
 ```

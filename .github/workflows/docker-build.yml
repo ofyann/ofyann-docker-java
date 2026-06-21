@@ -2,14 +2,13 @@ name: Docker Build and Push
 
 on:
   schedule:
-    # 每天 UTC 00:00 检查新版本并构建
-    - cron: '0 0 * * *'
+    # 每周一 UTC 00:00 全量多架构构建（JDK 更新频率低，每周足够；避免每日 16×3 QEMU 构建撑爆免费额度）
+    - cron: '0 0 * * 1'
   push:
     branches:
       - main
     paths:
       - 'Dockerfile'
-      - 'Dockerfile.minimal'
       - '.github/workflows/docker-build.yml'
       - 'build.sh'
   workflow_dispatch:
@@ -25,7 +24,7 @@ env:
   IMAGE_NAME: ofyann/java
 
 jobs:
-  # 第一步：获取所有版本的最新信息
+  # 第一步：获取所有版本的最新版本号（用于打具体版本标签）
   fetch-versions:
     runs-on: ubuntu-latest
     outputs:
@@ -44,7 +43,7 @@ jobs:
           for version in $JAVA_VERSIONS; do
             echo "检查 Java $version..."
 
-            # 从 Adoptium API 获取最新版本信息（过滤标准 JDK）
+            # 版本号与架构无关，统一用 x64 查询即可
             API_URL="https://api.adoptium.net/v3/assets/latest/${version}/hotspot?image_type=jdk&os=linux&architecture=x64"
             RESPONSE=$(curl -s "$API_URL")
 
@@ -58,32 +57,26 @@ jobs:
             SEMVER=$(echo "$VERSION_OBJ" | jq -r '.semver')
             OPENJDK_VERSION=$(echo "$VERSION_OBJ" | jq -r '.openjdk_version')
 
-            # 根据不同的 Java 版本构建不同的标签格式
+            # 构建具体版本标签
             if [ "$version" = "8" ]; then
-              # Java 8: openjdk_version "1.8.0_472-b08" -> 8u472-b08
+              # Java 8: openjdk_version "1.8.0_492-b09" -> 8u492b09
               SECURITY=$(echo "$OPENJDK_VERSION" | sed -n 's/.*_\([0-9]*\).*/\1/p')
               BUILD=$(echo "$OPENJDK_VERSION" | sed -n 's/.*-\(b[0-9]*\).*/\1/p')
 
               if [ -n "$SECURITY" ] && [ -n "$BUILD" ]; then
-                UPDATE="8u${SECURITY}"
-                FULL_VERSION="${UPDATE}${BUILD}"         # 8u472b08
-                DOWNLOAD_VERSION="${UPDATE}-${BUILD}"    # 8u472-b08
+                FULL_VERSION="8u${SECURITY}${BUILD}"
               else
                 echo "无法解析 Java 8 版本号: $OPENJDK_VERSION"
                 continue
               fi
             else
-              # Java 11+: semver "17.0.17+10" 或 "21.0.9+10.0.LTS"
-              # 去除 .LTS 后缀
+              # Java 11+: semver "17.0.19+10" 或 "21.0.9+10.0.LTS" -> 17.0.19_10
               CLEAN_SEMVER=$(echo "$SEMVER" | sed 's/\.0\.LTS$//' | sed 's/-LTS$//')
-
-              # 提取版本号: 17.0.17+10 -> 17.0.17 和 10
               UPDATE=$(echo "$CLEAN_SEMVER" | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
               BUILD=$(echo "$CLEAN_SEMVER" | sed -n 's/.*+\([0-9]*\).*/\1/p')
 
               if [ -n "$UPDATE" ] && [ -n "$BUILD" ]; then
-                FULL_VERSION="${UPDATE}_${BUILD}"        # 17.0.17_10
-                DOWNLOAD_VERSION="${UPDATE}+${BUILD}"    # 17.0.17+10
+                FULL_VERSION="${UPDATE}_${BUILD}"
               else
                 echo "无法解析 Java ${version} 版本号: $SEMVER"
                 continue
@@ -93,28 +86,27 @@ jobs:
             echo "  版本: $FULL_VERSION"
 
             # 添加到 matrix - 为每个版本创建两个条目（完整版和精简版）
-            # 完整版（带 Arthas）
+            # 标签遵循命名规则：ofyann/java:<distro>-<version>[-<variant>]
+            # 下载直链与 SHA256 由 Dockerfile 按 TARGETARCH 自行从 API 获取，matrix 无需携带
+            DISTRO="temurin"
             MATRIX_JSON=$(echo "$MATRIX_JSON" | jq \
+              --arg distro "$DISTRO" \
               --arg major "$version" \
               --arg full "$FULL_VERSION" \
-              --arg dl "$DOWNLOAD_VERSION" \
               '.include += [{
+                "distro": $distro,
                 "java_major": $major,
                 "full_version": $full,
-                "download_version": $dl,
                 "variant": "full",
                 "variant_suffix": ""
-              }]')
-
-            # 精简版（纯运行时）
-            MATRIX_JSON=$(echo "$MATRIX_JSON" | jq \
+              }]' | jq \
+              --arg distro "$DISTRO" \
               --arg major "$version" \
               --arg full "$FULL_VERSION" \
-              --arg dl "$DOWNLOAD_VERSION" \
               '.include += [{
+                "distro": $distro,
                 "java_major": $major,
                 "full_version": $full,
-                "download_version": $dl,
                 "variant": "minimal",
                 "variant_suffix": "-minimal"
               }]')
@@ -127,7 +119,7 @@ jobs:
           MATRIX_COMPACT=$(echo "$MATRIX_JSON" | jq -c .)
           echo "matrix=$MATRIX_COMPACT" >> $GITHUB_OUTPUT
 
-  # 第二步：构建和推送 Docker 镜像
+  # 第二步：多架构构建和推送 Docker 镜像
   build-and-push:
     needs: fetch-versions
     runs-on: ubuntu-latest
@@ -135,7 +127,6 @@ jobs:
 
     permissions:
       contents: read
-      packages: write
 
     strategy:
       fail-fast: false
@@ -145,6 +136,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 多架构构建需要 QEMU 仿真 arm64 / arm
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -161,8 +153,9 @@ jobs:
         id: check
         continue-on-error: true
         run: |
-          # 检查具体版本的镜像是否已存在
-          TAG="${{ matrix.full_version }}${{ matrix.variant_suffix }}"
+          # 检查具体版本的镜像（多架构 manifest list）是否已存在
+          # 标签格式：<distro>-<full_version><variant_suffix>
+          TAG="${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}"
           if docker manifest inspect ${{ env.IMAGE_NAME }}:${TAG} > /dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "镜像 ${TAG} 已存在"
@@ -171,79 +164,81 @@ jobs:
             echo "镜像 ${TAG} 不存在，需要构建"
           fi
 
-      - name: Build download URL
-        id: build_url
+      - name: Prepare build metadata
+        id: meta
         if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
-          JAVA_MAJOR=${{ matrix.java_major }}
-          DOWNLOAD_VERSION="${{ matrix.download_version }}"
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
-          if [ "$JAVA_MAJOR" = "8" ]; then
-            # Java 8: OpenJDK8U-jdk_x64_linux_hotspot_8u472b08.tar.gz
-            # URL: jdk8u472-b08/OpenJDK8U-jdk_x64_linux_hotspot_8u472b08.tar.gz
-            # 文件名格式: 移除 '-' 但保留 'u'
-            VERSION_CLEAN=$(echo "$DOWNLOAD_VERSION" | tr -d '-')
-            JAVA_URL="https://github.com/adoptium/temurin${JAVA_MAJOR}-binaries/releases/download/jdk${DOWNLOAD_VERSION}/OpenJDK${JAVA_MAJOR}U-jdk_x64_linux_hotspot_${VERSION_CLEAN}.tar.gz"
-          else
-            # Java 11+: OpenJDK17U-jdk_x64_linux_hotspot_17.0.15_6.tar.gz
-            # URL: jdk-17.0.15%2B6/OpenJDK17U-jdk_x64_linux_hotspot_17.0.15_6.tar.gz
-            VERSION_UNDERSCORE="${{ matrix.full_version }}"
-            DOWNLOAD_ENCODED=$(echo "$DOWNLOAD_VERSION" | sed 's/+/%2B/g')
-            JAVA_URL="https://github.com/adoptium/temurin${JAVA_MAJOR}-binaries/releases/download/jdk-${DOWNLOAD_ENCODED}/OpenJDK${JAVA_MAJOR}U-jdk_x64_linux_hotspot_${VERSION_UNDERSCORE}.tar.gz"
-          fi
-
-          echo "java_url=${JAVA_URL}" >> $GITHUB_OUTPUT
-          echo "下载 URL: ${JAVA_URL}"
-
-      - name: Build and push Docker image
-        if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
+      - name: Build and push multi-arch Docker image
+        # push 事件：代码改动必验证（忽略 exists 跳过）；schedule/dispatch：仅新版本构建
+        if: github.event_name == 'push' || steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.variant == 'minimal' && './Dockerfile.minimal' || './Dockerfile' }}
-          platforms: linux/amd64
-          push: true
+          file: ./Dockerfile
+          # 完整版/精简版由同一 Dockerfile 的不同 target 实现
+          target: ${{ matrix.variant }}
+          # push 事件仅 amd64 构建验证不推送（快速反馈、不耗 QEMU、不污染镜像仓库）；
+          # schedule/dispatch 全架构构建并推送
+          platforms: ${{ github.event_name == 'push' && 'linux/amd64' || 'linux/amd64,linux/arm64,linux/arm' }}
+          push: ${{ github.event_name != 'push' }}
+          load: ${{ github.event_name == 'push' }}
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ matrix.java_major }}${{ matrix.variant_suffix }}
-            ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}${{ matrix.variant_suffix }}
+            ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.java_major }}${{ matrix.variant_suffix }}
+            ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}
           build-args: |
             JAVA_MAJOR=${{ matrix.java_major }}
             JAVA_VERSION=${{ matrix.java_major }}
-            JAVA_URL=${{ steps.build_url.outputs.java_url }}
-            BUILD_DATE=${{ github.event.repository.updated_at }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
             VCS_REF=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.java_major }}-${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.java_major }}-${{ matrix.variant }}
+          cache-from: type=gha,scope=${{ matrix.distro }}-${{ matrix.java_major }}-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.distro }}-${{ matrix.java_major }}-${{ matrix.variant }}
 
-      - name: Test image
-        if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
+      - name: Test image (amd64)
+        if: github.event_name == 'push' || steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
-          TAG="${{ matrix.full_version }}${{ matrix.variant_suffix }}"
-          echo "测试镜像: ${{ env.IMAGE_NAME }}:${TAG}"
-          docker run --rm ${{ env.IMAGE_NAME }}:${TAG} java -version
+          set -e
+          TAG="${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}"
+          IMG="${{ env.IMAGE_NAME }}:${TAG}"
+          echo "测试镜像: $IMG (amd64)"
+          docker run --rm --platform linux/amd64 $IMG java -version
+          docker run --rm --platform linux/amd64 $IMG javac -version
 
-          # 完整版测试 javac
-          if [ "${{ matrix.variant }}" = "full" ]; then
-            docker run --rm ${{ env.IMAGE_NAME }}:${TAG} javac -version || echo "警告: javac 不可用（JDK 8 可能正常）"
+          # 时区断言：默认 Asia/Shanghai (+0800)
+          echo "--- 时区测试 ---"
+          docker run --rm --platform linux/amd64 $IMG sh -c 'echo "date +%Z=$(date +%Z) date +%z=$(date +%z)"'
+          TZ_OFFSET=$(docker run --rm --platform linux/amd64 $IMG date +%z)
+          if [ "$TZ_OFFSET" != "+0800" ]; then
+            echo "::error::系统时区异常: date +%z=$TZ_OFFSET (期望 +0800)"
+            exit 1
           fi
+          # Java 层面时区断言：解析 ZonedDateTime 输出末尾的 +08:00
+          JAVA_TZ=$(docker run --rm --platform linux/amd64 $IMG sh -c \
+            'printf "%s\n" "import java.time.ZonedDateTime;" "public class T{public static void main(String[]a){System.out.println(ZonedDateTime.now());}}" > /tmp/T.java && cd /tmp && javac T.java && java T')
+          echo "Java ZonedDateTime.now() = $JAVA_TZ"
+          echo "$JAVA_TZ" | grep -q '+08:00' || { echo "::error::Java 时区异常: $JAVA_TZ (期望含 +08:00)"; exit 1; }
 
-          # 测试时区
-          TZ=$(docker run --rm ${{ env.IMAGE_NAME }}:${TAG} date +%Z)
-          echo "容器时区: $TZ"
-
-          # 测试 UTF-8 支持
-          docker run --rm ${{ env.IMAGE_NAME }}:${TAG} locale | grep -i "utf"
+          # locale 断言
+          echo "--- locale 测试 ---"
+          docker run --rm --platform linux/amd64 $IMG sh -c 'locale 2>/dev/null | grep -E "^(LANG|LC_ALL)=" '
+          docker run --rm --platform linux/amd64 $IMG sh -c 'locale -a | grep -qi "^en_US\.utf" && echo "en_US.UTF-8 已生成 ✓" || { echo "::error::en_US.UTF-8 locale 未生成"; exit 1; }'
+          # UTF-8 编码确保中文显示（en_US.UTF-8 足够，与 locale 数量无关）
+          ZH=$(docker run --rm --platform linux/amd64 $IMG sh -c "printf '你好世界'")
+          echo "中文输出测试: [$ZH]"
 
           echo "✓ 测试通过"
+          echo "注: arm64 / arm 架构依赖 QEMU 仿真运行较慢，仅验证构建成功，不单独运行测试"
 
       - name: Update version info
-        if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
+        if: github.event_name == 'push' || steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
           VARIANT_NAME="${{ matrix.variant == 'minimal' && '精简版' || '完整版' }}"
-          echo "Java ${{ matrix.java_major }} ${VARIANT_NAME} - ${{ matrix.full_version }}${{ matrix.variant_suffix }} 构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "${{ matrix.distro }} Java ${{ matrix.java_major }} ${VARIANT_NAME} - ${{ matrix.full_version }}${{ matrix.variant_suffix }} 构建完成" >> $GITHUB_STEP_SUMMARY
           echo "镜像标签:" >> $GITHUB_STEP_SUMMARY
-          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.java_major }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
-          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.full_version }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.java_major }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "架构: linux/amd64, linux/arm64, linux/arm" >> $GITHUB_STEP_SUMMARY
 
   # 第三步：生成构建报告
   report:
@@ -260,8 +255,10 @@ jobs:
           echo "触发方式: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "支持的 Java 版本: 8, 17, 21, 25" >> $GITHUB_STEP_SUMMARY
+          echo "发行版: temurin（当前）" >> $GITHUB_STEP_SUMMARY
           echo "镜像仓库: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "目标架构: linux/amd64, linux/arm64, linux/arm" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "每个 Java 版本构建两个镜像:" >> $GITHUB_STEP_SUMMARY
-          echo "  - 完整版（带 Arthas）: \`ofyann/java:17\`" >> $GITHUB_STEP_SUMMARY
-          echo "  - 精简版（纯运行时）: \`ofyann/java:17-minimal\`" >> $GITHUB_STEP_SUMMARY
+          echo "每个 Java 版本构建两个多架构镜像（标签格式 <distro>-<version>[-<variant>]）:" >> $GITHUB_STEP_SUMMARY
+          echo "  - 完整版（带 Arthas）: \`ofyann/java:temurin-17\`" >> $GITHUB_STEP_SUMMARY
+          echo "  - 精简版（纯运行时）: \`ofyann/java:temurin-17-minimal\`" >> $GITHUB_STEP_SUMMARY
