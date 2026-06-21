@@ -1,5 +1,18 @@
 # 更新日志
 
+## [2.5.0] - 2026-06-22
+
+### 升级
+
+- 🔧 **GitHub Actions 全部升级到最新主版本（Node 24 运行时）**，彻底消除 Node 20 弃用警告：
+  - `actions/checkout` v5 → v7
+  - `docker/setup-qemu-action` v3 → v4
+  - `docker/setup-buildx-action` v3 → v4
+  - `docker/login-action` v3 → v4
+  - `docker/build-push-action` v6 → v7
+- 🔧 **Arthas 升级** 4.1.5 → 4.3.0（zip 结构不变，安装逻辑无需改动）
+  - tini 保持 v0.19.0（krallin/tini 仓库最新且为最终版本，项目已不活跃）
+
 ## [2.4.0] - 2026-06-22
 
 ### 修复

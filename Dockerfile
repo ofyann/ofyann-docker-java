@@ -163,7 +163,7 @@ FROM minimal AS full
 
 # ARG 需在本阶段重新声明才能在 LABEL/ENV 中引用（ARG 不跨 stage 继承）
 ARG JAVA_VERSION=17
-ARG ARTHAS_VERSION=4.1.5
+ARG ARTHAS_VERSION=4.3.0
 
 LABEL org.opencontainers.image.title="OfYann JDK" \
       org.opencontainers.image.description="Eclipse Temurin JDK ${JAVA_VERSION} (full) on Debian Stable Slim with Chinese support"
