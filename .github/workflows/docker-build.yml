@@ -2,15 +2,8 @@ name: Docker Build and Push
 
 on:
   schedule:
-    # 每周一 UTC 00:00 全量多架构构建（JDK 更新频率低，每周足够；避免每日 16×3 QEMU 构建撑爆免费额度）
+    # 每周一 UTC 00:00 全量多架构构建（JDK 更新频率低，每周足够；避免每日多架构 QEMU 构建撑爆免费额度）
     - cron: '0 0 * * 1'
-  push:
-    branches:
-      - main
-    paths:
-      - 'Dockerfile'
-      - '.github/workflows/docker-build.yml'
-      - 'build.sh'
   workflow_dispatch:
     inputs:
       force_build:
@@ -134,9 +127,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # 多架构构建需要 QEMU 仿真 arm64 / arm
+      # 多架构构建需要 QEMU 仿真 arm64（amd64 原生）
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -171,19 +164,17 @@ jobs:
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
       - name: Build and push multi-arch Docker image
-        # push 事件：代码改动必验证（忽略 exists 跳过）；schedule/dispatch：仅新版本构建
-        if: github.event_name == 'push' || steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
-        uses: docker/build-push-action@v5
+        # 仅新版本构建（已存在则跳过）；force_build 可强制重建。由 schedule 或手动触发
+        if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           # 完整版/精简版由同一 Dockerfile 的不同 target 实现
           target: ${{ matrix.variant }}
-          # push 事件仅 amd64 构建验证不推送（快速反馈、不耗 QEMU、不污染镜像仓库）；
-          # schedule/dispatch 全架构构建并推送
-          platforms: ${{ github.event_name == 'push' && 'linux/amd64' || 'linux/amd64,linux/arm64,linux/arm' }}
-          push: ${{ github.event_name != 'push' }}
-          load: ${{ github.event_name == 'push' }}
+          # amd64 原生 + arm64 QEMU 仿真；不含 arm/v7（QEMU 仿真下 java interpreter 解析不稳定）
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.java_major }}${{ matrix.variant_suffix }}
             ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}
@@ -196,7 +187,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.distro }}-${{ matrix.java_major }}-${{ matrix.variant }}
 
       - name: Test image (amd64)
-        if: github.event_name == 'push' || steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
+        if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
           set -e
           TAG="${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}"
@@ -228,17 +219,17 @@ jobs:
           echo "中文输出测试: [$ZH]"
 
           echo "✓ 测试通过"
-          echo "注: arm64 / arm 架构依赖 QEMU 仿真运行较慢，仅验证构建成功，不单独运行测试"
+          echo "注: arm64 架构依赖 QEMU 仿真运行较慢，仅验证构建成功，不单独运行测试"
 
       - name: Update version info
-        if: github.event_name == 'push' || steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
+        if: steps.check.outputs.exists != 'true' || github.event.inputs.force_build == 'true'
         run: |
           VARIANT_NAME="${{ matrix.variant == 'minimal' && '精简版' || '完整版' }}"
           echo "${{ matrix.distro }} Java ${{ matrix.java_major }} ${VARIANT_NAME} - ${{ matrix.full_version }}${{ matrix.variant_suffix }} 构建完成" >> $GITHUB_STEP_SUMMARY
           echo "镜像标签:" >> $GITHUB_STEP_SUMMARY
           echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.java_major }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "  - ${{ env.IMAGE_NAME }}:${{ matrix.distro }}-${{ matrix.full_version }}${{ matrix.variant_suffix }}" >> $GITHUB_STEP_SUMMARY
-          echo "架构: linux/amd64, linux/arm64, linux/arm" >> $GITHUB_STEP_SUMMARY
+          echo "架构: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
 
   # 第三步：生成构建报告
   report:
@@ -257,7 +248,7 @@ jobs:
           echo "支持的 Java 版本: 8, 17, 21, 25" >> $GITHUB_STEP_SUMMARY
           echo "发行版: temurin（当前）" >> $GITHUB_STEP_SUMMARY
           echo "镜像仓库: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "目标架构: linux/amd64, linux/arm64, linux/arm" >> $GITHUB_STEP_SUMMARY
+          echo "目标架构: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "每个 Java 版本构建两个多架构镜像（标签格式 <distro>-<version>[-<variant>]）:" >> $GITHUB_STEP_SUMMARY
           echo "  - 完整版（带 Arthas）: \`ofyann/java:temurin-17\`" >> $GITHUB_STEP_SUMMARY

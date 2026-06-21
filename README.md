@@ -7,8 +7,8 @@
 - ✅ **两个版本可选**（均为完整 JDK，保留全部 `java.*`/`jdk.*` 模块，不再用 jlink 裁剪，避免缺模块运行异常；由同一 Dockerfile 的不同 build target 实现）:
   - **完整版**（`--target full`）: 含 Arthas 诊断工具与开发工具，约 230-260MB
   - **精简版**（`--target minimal`）: 纯运行时环境，无 Arthas/编辑器，约 190-210MB
-- ✅ **多架构支持**: `linux/amd64`、`linux/arm64`、`linux/arm`(armv7)，CI 自动构建多架构 manifest
-- ✅ **自动构建**: 每周自动检测新版本并多架构构建（push 触发仅 amd64 验证）
+- ✅ **多架构支持**: `linux/amd64`、`linux/arm64`，CI 自动构建多架构 manifest
+- ✅ **自动构建**: 每周自动检测新版本并多架构构建，也可手动触发
 - ✅ **多版本支持**: Java 8, 17, 21, 25
 - ✅ **供应链校验**: 下载 JDK 时按架构校验 SHA256（取自 Adoptium API）
 - ✅ **时区支持**: 默认 Asia/Shanghai，可自定义
@@ -49,7 +49,7 @@
 - `<distro>`：JDK 发行版（`temurin` / `zulu` / `corretto` / `liberica` 等，当前仅 `temurin`）
 - `<version>`：Java 大版本（`8`/`17`/`21`/`25`，滚动）或具体小版本（`17.0.19_10`、`8u492b09`，固定）
 - `<variant>`：可选变体，省略=完整版；`-minimal`=精简运行时
-- 架构不进标签，通过多架构 manifest list 自动选择（amd64/arm64/arm）
+- 架构不进标签，通过多架构 manifest list 自动选择（amd64/arm64）
 
 > **迁移提示**：早期版本使用过无 distro 前缀的旧标签（如 `ofyann/java:17`），现已弃用不再更新。请在 `FROM` 中迁移到 `ofyann/java:temurin-17`。完整规则见 [AGENTS.md §6](./AGENTS.md)。
 
@@ -170,7 +170,7 @@ docker build \
 # 多架构构建（需 buildx + QEMU）
 docker buildx build \
   --target full \
-  --platform linux/amd64,linux/arm64,linux/arm \
+  --platform linux/amd64,linux/arm64 \
   --build-arg JAVA_MAJOR=17 \
   -t ofyann/java:temurin-17 \
   --push .
@@ -207,11 +207,13 @@ docker run --rm ofyann/java:temurin-17 java --list-modules
 
 ### 工作流程
 
-1. **每周自动构建**: 每周一 UTC 00:00 全量多架构构建（push 到 main 仅 amd64 验证，不推送）
+1. **每周自动构建**: 每周一 UTC 00:00 全量多架构构建并推送（也可手动触发）
 2. **自动检测**: 从 Adoptium API 获取最新版本号（用于打具体版本标签；下载直链与 SHA256 由 Dockerfile 按架构自行获取）
 3. **增量构建**: 仅构建新版本或更新的版本（通过 manifest 检查跳过已存在的多架构镜像）
-4. **多架构**: 单次 buildx 构建同时产出 amd64 / arm64 / arm
+4. **多架构**: 单次 buildx 构建同时产出 amd64 / arm64
 5. **双标签**: 同时推送大版本和具体版本标签
+
+> 注：push 到 main **不会**触发构建，仅定时任务（每周一）与手动触发（Actions → Run workflow）会构建并推送镜像。
 
 ### 配置步骤
 
@@ -223,21 +225,16 @@ docker run --rm ofyann/java:temurin-17 java --list-modules
 
 3. 启用 GitHub Actions
 
-4. 推送代码触发首次构建:
-   ```bash
-   git push origin main
-   ```
-
-5. 或手动触发:
+4. 推送代码后，首次构建需手动触发（push 不自动构建）:
    - 访问 Actions 页面
    - 选择 "Docker Build and Push"
-   - 点击 "Run workflow"
+   - 点击 "Run workflow"（可勾选 `force_build` 强制重建所有版本）
 
 ### 构建触发条件
 
-- ✅ 每周自动检查新版本（schedule），push 到 main 触发 amd64 快速验证
-- ✅ 推送到 main 分支
-- ✅ 手动触发 workflow
+- ✅ 每周一 UTC 00:00 自动检查新版本（schedule）
+- ✅ 手动触发 workflow（workflow_dispatch，可强制重建）
+- ❌ push 到 main 不触发构建（避免每次推送都消耗多架构 QEMU 构建额度）
 
 ## 镜像说明
 
@@ -362,11 +359,12 @@ TZ=Asia/Shanghai                         # 显式时区，与 /etc/localtime 一
 
 ### 架构支持
 
-CI 同时构建并推送 **`linux/amd64`**、**`linux/arm64`**、**`linux/arm`(armv7)** 三种架构的镜像（同一标签的多架构 manifest list，`docker pull` 会自动选择匹配宿主的架构）。
+CI 同时构建并推送 **`linux/amd64`**、**`linux/arm64`** 两种架构的镜像（同一标签的多架构 manifest list，`docker pull` 会自动选择匹配宿主的架构）。
 
 - amd64：GitHub runner 原生构建
-- arm64 / arm：通过 QEMU 仿真构建，速度较慢但功能完整
-- arm64/arm 的运行时测试仅验证构建成功（QEMU 仿真运行较慢，不单独跑测试套件）
+- arm64：通过 QEMU 仿真构建，速度较慢但功能完整
+- arm64 的运行时测试仅验证构建成功（QEMU 仿真运行较慢，不单独跑测试套件）
+- 不含 arm/v7（armv7）：QEMU 仿真下 java 二进制 interpreter 解析不稳定，官方镜像亦常如此取舍
 
 ### GitHub Actions 限制
 
@@ -378,7 +376,7 @@ CI 同时构建并推送 **`linux/amd64`**、**`linux/arm64`**、**`linux/arm`(a
 **建议:**
 - 使用缓存减少构建时间
 - 按需构建，避免重复构建相同版本
-- 定时任务设置合理的频率（每天一次）
+- 定时任务设置合理的频率（每周一次，多架构 QEMU 构建成本较高）
 
 ### Docker Hub 限制
 
@@ -406,7 +404,7 @@ CI 同时构建并推送 **`linux/amd64`**、**`linux/arm64`**、**`linux/arm`(a
 2. **增量构建**: 检查镜像是否存在，避免重复构建
 3. **并行构建**: matrix 策略并行构建多个版本
 4. **标签管理**: 保留必要的版本标签
-5. **定时任务**: 合理设置检查频率（建议每天一次）
+5. **定时任务**: 合理设置检查频率（建议每周一次，多架构 QEMU 构建成本较高）
 
 ## 常见问题
 

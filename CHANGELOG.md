@@ -1,5 +1,17 @@
 # 更新日志
 
+## [2.4.0] - 2026-06-22
+
+### 修复
+
+- 🐛 **修复 arm/v7 构建失败（exit 127）**：QEMU 仿真下 arm/v7 平台的 java 二进制因 ELF interpreter（`ld-linux-armhf.so.3`）解析失败报 `/opt/jdk/bin/java: not found`。CI 移除 `linux/arm`，仅保留 `linux/amd64,linux/arm64`（官方镜像亦常如此取舍）
+- 🐛 **移除 push 触发构建**：push 到 main 不再触发 CI 构建（避免每次推送消耗多架构 QEMU 构建额度）；仅保留 schedule（每周一）与 workflow_dispatch（手动）触发构建并推送
+- 🔧 **升级 actions 修复 Node 20 弃用警告**：`actions/checkout@v4`→`v5`、`docker/build-push-action@v5`→`v6`（Node 24 主版本）
+
+### 变更
+
+- 📝 README/AGENTS 同步：架构改为 amd64+arm64，触发条件改为 schedule+手动，注明 push 不构建
+
 ## [2.3.0] - 2026-06-21
 
 ### 重大变更（镜像命名规则）
