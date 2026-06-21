@@ -1,5 +1,14 @@
 # 更新日志
 
+## [2.5.1] - 2026-06-22
+
+### 修复
+
+- 🐛 **修复多架构构建全部失败（arm64 下载错误架构 JDK）**
+  - 根因：`ARG TARGETARCH=amd64` 设了默认值，使 BuildKit 的自动 ARG `TARGETARCH` 退化为普通 ARG，自动按平台注入失效——所有平台都拿到默认值 `amd64`，arm64 平台也下载 x64 的 JDK，arm64 容器执行 x64 二进制报 `/opt/jdk/bin/java: not found`（exit 127）
+  - 修复：改为 `ARG TARGETARCH`（不设默认值），BuildKit 恢复按构建平台注入正确架构（amd64→x64、arm64→aarch64）
+  - 此前误判为 arm/v7 QEMU 问题（arm/v7 报错实为同一根因），本轮定位到真正根因
+
 ## [2.5.0] - 2026-06-22
 
 ### 升级

@@ -13,8 +13,10 @@
 # =============================================================================
 FROM debian:stable-slim AS jdk-builder
 
-# TARGETARCH 由 BuildKit/buildx 自动注入（amd64/arm64/arm）；本地 docker build 默认为宿主架构
-ARG TARGETARCH=amd64
+# TARGETARCH 由 BuildKit/buildx 自动注入（amd64/arm64/arm），不可设默认值——
+# 设默认值会把它当作普通 ARG 覆盖自动注入，导致多架构构建时所有平台都下载同一架构的 JDK。
+# 本地 docker build 不指定 --platform 时，BuildKit 自动用宿主架构填充 TARGETARCH。
+ARG TARGETARCH
 ARG JAVA_MAJOR=17
 # 可选：直接指定下载 URL 与校验和；留空则按 TARGETARCH 从 Adoptium API 自动获取（多架构构建用）
 ARG JAVA_URL=

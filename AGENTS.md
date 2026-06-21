@@ -60,7 +60,9 @@ make test JAVA_VERSION=17         # 运行 java -version / javac -version 验证
 | `TIMEZONE` | 默认 `Asia/Shanghai` | 两者皆可覆盖 |
 | `BUILD_DATE` / `VCS_REF` | OCI 标签 | build.sh 用 `date -u`；CI 用单独 step 生成 |
 
-> **架构解析**：Dockerfile 用 BuildKit 的 `TARGETARCH`（amd64/arm64）映射到 Adoptium 架构名（x64/aarch64）。当 `JAVA_URL`/`JAVA_SHA256` 任一为空时，按 `TARGETARCH` 从 Adoptium API 取 `binary.package.link` + `binary.package.checksum`。这使单次 buildx 多平台构建能为每个平台取到正确的直链与校验和。（Dockerfile 内仍保留 `arm`→`arm` 映射分支供本地 buildx 扩展用，但 CI 不构建 arm/v7。）
+> **架构解析**：Dockerfile 用 BuildKit 的自动 ARG `TARGETARCH`（amd64/arm64）映射到 Adoptium 架构名（x64/aarch64）。当 `JAVA_URL`/`JAVA_SHA256` 任一为空时，按 `TARGETARCH` 从 Adoptium API 取 `binary.package.link` + `binary.package.checksum`。这使单次 buildx 多平台构建能为每个平台取到正确的直链与校验和。
+>
+> ⚠️ **关键陷阱**：`TARGETARCH` 是 BuildKit 自动注入的 ARG，**只能 `ARG TARGETARCH` 声明，绝不能设默认值**（`ARG TARGETARCH=amd64` 会使它退化为普通 ARG、覆盖自动注入，导致所有平台都下载同一架构 JDK → 跨架构执行报 `not found`）。（Dockerfile 内保留 `arm`→`arm` 映射分支供本地 buildx 扩展用，但 CI 不构建 arm/v7。）
 
 ### CI 发布流程
 
@@ -209,7 +211,8 @@ FROM ofyann/java:temurin-17
 > - **单 Dockerfile 双 target**：合并 `Dockerfile` + `Dockerfile.minimal` 为单文件（`jdk-builder`→`minimal`→`full`），消除双份维护漂移。build.sh 与 CI 改用 `--target` 切换变体。
 > - **build.sh 边界 bug**：版本校验改纯数字+列表精确匹配（拒绝 `"8 17"`/`.*` 等注入）；MINIMAL_TAG 处理无冒号标签；构建后测试门加 `|| return 1`（原 `if` 上下文 set -e 挂起致测试失效）；版本解析优先用 jq 结构化字段。
 > - **CI 成本控制**：schedule 改每周（避免每日多架构 QEMU 撑爆额度）；**push 不触发构建**，仅 schedule + 手动触发构建并推送。
-> - **arm/v7 移除**：QEMU 仿真下 arm/v7 java 二进制 interpreter（`ld-linux-armhf.so.3`）解析失败报 `not found`（exit 127），CI 改为仅 amd64+arm64。升级 actions 到 Node 24 主版本（checkout@v5、build-push-action@v6）。
+> - **arm/v7 移除**：CI 改为仅 amd64+arm64。升级 actions 到 Node 24 主版本（checkout@v7、setup-*/login@v4、build-push-action@v7）；Arthas 4.1.5→4.3.0。
+> - **修复多架构构建根因**：`ARG TARGETARCH=amd64` 设默认值导致 BuildKit 自动 ARG 失效，arm64 平台误下载 x64 JDK。改为 `ARG TARGETARCH`（无默认值）。此前的 arm/v7 报错实为同一根因。
 
 > 仍待处理（改动时可一并修复）：
 
