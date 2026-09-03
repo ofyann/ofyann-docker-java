@@ -1,4 +1,4 @@
-# OfYann Docker Java - 单 Dockerfile 双变体
+# docker-java - 单 Dockerfile 双变体
 #
 # 构建目标（build target）：
 #   --target minimal  精简版：完整 JDK（仅运行时），无 Arthas/编辑器/中文 locale
@@ -89,10 +89,10 @@ ARG TINI_VERSION=v0.19.0
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.authors="OfYann" \
       org.opencontainers.image.url="https://hub.docker.com/r/ofyann/java" \
-      org.opencontainers.image.source="https://github.com/ofyann/ofyann-docker-java" \
+      org.opencontainers.image.source="https://github.com/ofyann/docker-java" \
       org.opencontainers.image.version="${JAVA_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.title="OfYann JDK Minimal" \
+      org.opencontainers.image.title="Temurin JDK Minimal" \
       org.opencontainers.image.description="Eclipse Temurin JDK ${JAVA_VERSION} (minimal) Runtime on Debian Stable Slim"
 
 # 从构建阶段复制裁剪后的完整 JDK
@@ -167,7 +167,7 @@ FROM minimal AS full
 ARG JAVA_VERSION=17
 ARG ARTHAS_VERSION=4.3.0
 
-LABEL org.opencontainers.image.title="OfYann JDK" \
+LABEL org.opencontainers.image.title="Temurin JDK" \
       org.opencontainers.image.description="Eclipse Temurin JDK ${JAVA_VERSION} (full) on Debian Stable Slim with Chinese support"
 
 # 叠加开发工具、中文 locale 与 Arthas

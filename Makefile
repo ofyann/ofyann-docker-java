@@ -17,7 +17,7 @@ YELLOW := \033[1;33m
 NC := \033[0m
 
 help: ## 显示帮助信息
-	@echo "$(GREEN)OfYann Docker Java - Makefile 帮助$(NC)"
+	@echo "$(GREEN)docker-java - Makefile 帮助$(NC)"
 	@echo ""
 	@echo "可用命令:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'

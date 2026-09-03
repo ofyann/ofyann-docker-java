@@ -7,7 +7,7 @@
 
 ## 1. 项目速览
 
-- **名称**: ofyann-docker-java
+- **名称**: docker-java
 - **一句话描述**: 自动构建的 Eclipse Temurin JDK Docker 镜像，提供完整版（带 Arthas 诊断工具）与精简版（纯运行时）两种变体，均为**完整 JDK**（保留全部模块，不再用 jlink），支持 Java 8 / 17 / 21 / 25，多架构（amd64/arm64），每周定时或手动触发构建。
 - **技术栈**: Dockerfile（多阶段构建）+ Debian stable-slim 基础镜像 + 完整 Temurin JDK（手工安全裁剪，非 jlink）+ GitHub Actions（matrix + buildx 多平台）+ Bash 构建脚本 + Makefile
 - **目标环境**: Linux 容器运行时（Docker / Kubernetes），CI 产出 `linux/amd64`、`linux/arm64` 多架构 manifest（不含 arm/v7：QEMU 仿真下 java 二进制 interpreter 解析不稳定）。
@@ -17,7 +17,7 @@
 ## 2. 目录结构速查
 
 ```text
-ofyann-docker-java/
+docker-java/
 ├── Dockerfile                 # 单 Dockerfile 三阶段：jdk-builder → minimal → full（双变体由 build target 切换）
 ├── build.sh                   # 本地构建脚本：从 Adoptium API 自动获取版本号，调用 docker build
 ├── Makefile                   # 封装 build/test/push/clean/inspect 等常用命令
@@ -26,7 +26,6 @@ ofyann-docker-java/
 ├── README.md                  # 面向使用者的完整文档
 ├── TOOLS.md                   # 镜像内工具说明（完整版工具清单）
 ├── CHANGELOG.md               # 更新日志
-├── LICENSE                    # MIT
 ├── .dockerignore              # 构建上下文忽略规则
 └── .gitignore                 # 忽略 versions.json 等动态产物
 ```

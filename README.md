@@ -1,4 +1,4 @@
-# OfYann Docker Java
+# docker-java
 
 自动构建的 Eclipse Temurin JDK Docker 镜像，支持多版本和自动更新。
 
@@ -473,7 +473,7 @@ docker run -v /etc/localtime:/etc/localtime:ro ofyann/java:temurin-17 date
 ## 项目结构
 
 ```
-ofyann-docker-java/
+docker-java/
 ├── .github/
 │   └── workflows/
 │       └── docker-build.yml       # GitHub Actions 工作流
@@ -485,17 +485,12 @@ ofyann-docker-java/
 ├── CHANGELOG.md                   # 更新日志
 ├── AGENTS.md                      # AI 助手项目上下文
 ├── CLAUDE.md                      # 指向 AGENTS.md
-├── LICENSE                        # MIT
 ├── .dockerignore                  # Docker 忽略文件
 └── .gitignore                     # Git 忽略文件
 ```
-
-## 许可证
-
-MIT License
 
 ## 相关链接
 
 - [Eclipse Temurin](https://adoptium.net/)
 - [Docker Hub](https://hub.docker.com/r/ofyann/java)
-- [GitHub Repository](https://github.com/ofyann/ofyann-docker-java)
+- [GitHub Repository](https://github.com/ofyann/docker-java)
